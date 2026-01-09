@@ -1,0 +1,7 @@
+# 隐藏文件（包括 .crag.db 数据库）
+.*
+!.gitignore
+!.cursor
+
+# 编译产物
+crag

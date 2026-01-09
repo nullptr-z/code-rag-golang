@@ -1,0 +1,87 @@
+package nextplan
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+// Node 代表图谱中的一个代码节点（函数、结构体等）
+type Node struct {
+	ID         string   // 唯一标识，如 "pkg/user.go:UpdateUser"
+	Name       string   // 函数名
+	FilePath   string   // 文件路径
+	SourceCode string   // 源码片段（延迟加载）
+}
+
+// GraphClient 模拟你的图数据库查询接口
+type GraphClient struct {
+	// 这里可以是 Neo4j 驱动或你自定义的 RAG 索引
+}
+
+// GetNeighbors 获取上游（Caller）或下游（Callee）
+func (g *GraphClient) GetNeighbors(nodeID string, direction string) []Node {
+	// 伪代码：执行图查询
+	// direction == "IN" (Upstream), "OUT" (Downstream)
+	// return db.Query("MATCH (n)-[r:%s]->(target {id: %s}) RETURN n", direction, nodeID)
+	return []Node{}
+}
+
+// ContextFiller 是填充 Prompt 的核心引擎
+type ContextFiller struct {
+	Graph *GraphClient
+}
+
+// FillPrompt 构造最终发给 AI 的上下文
+func (f *ContextFiller) FillPrompt(targetNodeID string) string {
+	// 1. 获取核心节点信息
+	target := f.loadNodeDetail(targetNodeID)
+
+	// 2. 拓扑扫描：获取上游（谁调了我）
+	upstreams := f.Graph.GetNeighbors(targetNodeID, "IN")
+	var upstreamCtx string
+	for _, n := range upstreams {
+		detail := f.loadNodeDetail(n.ID)
+		upstreamCtx += fmt.Sprintf("- 函数: %s, 路径: %s\n", detail.Name, detail.FilePath)
+	}
+
+	// 3. 拓扑扫描：获取下游（我调了谁）
+	downstreams := f.Graph.GetNeighbors(targetNodeID, "OUT")
+	var downstreamCtx string
+	for _, n := range downstreams {
+		detail := f.loadNodeDetail(n.ID)
+		downstreamCtx += fmt.Sprintf("- 函数: %s, 路径: %s\n", detail.Name, detail.FilePath)
+	}
+
+	// 4. 组装 Prompt (利用上一步提供的模板)
+	prompt := fmt.Sprintf(`
+[核心修改点]
+Target: %s
+File: %s
+Source Code:
+%s
+
+[上游调用者]
+%s
+
+[下游依赖项]
+%s
+`, target.Name, target.FilePath, target.SourceCode, upstreamCtx, downstreamCtx)
+
+	return prompt
+}
+
+// 辅助函数：根据路径和行号读取实际代码块
+func (f *ContextFiller) loadNodeDetail(id string) Node {
+	// 实际落地时，建议从 AST 解析结果中直接缓存代码块
+	// 或者通过 os.ReadFile 读取文件
+	code, _ := os.ReadFile("...")
+	return Node{ID: id, SourceCode: string(code)}
+}
+
+func main() {
+	filler := &ContextFiller{Graph: &GraphClient{}}
+	// 当用户说“我想改 UpdateUser”时
+	finalPrompt := filler.FillPrompt("internal/service/user.go:UpdateUser")
+	fmt.Println(finalPrompt)
+}

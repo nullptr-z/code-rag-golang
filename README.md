@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**crag** (Code RAG) is a Go static analysis tool for building function call graphs, helping track the impact scope of code changes and reducing missed modifications during AI-assisted coding.
+**crag** (Code RAG) This is for the Golang language. static analysis tool for building function call graphs, helping track the impact scope of code changes and reducing missed modifications during AI-assisted coding.
 
 ## Problem Statement
 

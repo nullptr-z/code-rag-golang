@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**crag** (Code RAG) 是一个 Go 代码静态分析工具，用于构建函数调用图谱，帮助追踪代码变更的影响范围，减少 AI 编码时的漏改问题。
+**crag** (Code RAG) 这是一个用于 Golang 的代码静态分析工具，用于构建函数调用图谱，帮助追踪代码变更的影响范围，减少 AI 编码时的漏改问题。
 
 ## 问题背景
 

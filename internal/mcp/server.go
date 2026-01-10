@@ -468,7 +468,7 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到函数：%s", funcName), true
+		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", funcName), true
 	}
 
 	node := nodes[0]
@@ -522,7 +522,7 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到函数：%s", funcName), true
+		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", funcName), true
 	}
 
 	node := nodes[0]
@@ -571,7 +571,7 @@ func (s *Server) toolSearch(args map[string]interface{}) (string, bool) {
 	}
 
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到匹配 '%s' 的函数", pattern), false
+		return fmt.Sprintf("未找到匹配 '%s' 的函数\n\n💡 提示：如果代码最近有更新，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", pattern), false
 	}
 
 	total := len(nodes)
@@ -668,7 +668,7 @@ func (s *Server) toolMermaid(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到函数：%s", funcName), true
+		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", funcName), true
 	}
 
 	node := nodes[0]

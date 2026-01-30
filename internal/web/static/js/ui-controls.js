@@ -2,26 +2,29 @@
  * UI controls and interactions
  */
 
-// Render node list in sidebar
+// Render node list in sidebar (grouped by file)
 function renderNodeList(nodes) {
   const container = document.getElementById('node-list');
   const groups = {};
 
+  // Group by file path
   nodes.forEach(node => {
-    const group = node.group || 'other';
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(node);
+    const file = node.file || 'unknown';
+    if (!groups[file]) groups[file] = [];
+    groups[file].push(node);
   });
 
   let html = '';
-  Object.entries(groups).sort((a, b) => b[1].length - a[1].length).forEach(([group, groupNodes]) => {
+  // Sort files by number of functions (descending)
+  Object.entries(groups).sort((a, b) => b[1].length - a[1].length).forEach(([file, groupNodes]) => {
     const sortedNodes = groupNodes.sort((a, b) => a.label.localeCompare(b.label));
+    // Get short file name for display
+    const shortFile = file.split('/').slice(-2).join('/');
     html += `
       <div class="node-group">
         <div class="node-group-header" onclick="toggleGroup(this)">
           <span class="toggle">▼</span>
-          <div class="node-dot color-${group}"></div>
-          ${group} (${sortedNodes.length})
+          📄 ${shortFile} (${sortedNodes.length})
         </div>
         <div class="node-items">
           ${sortedNodes.map(n => `

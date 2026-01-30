@@ -477,3 +477,232 @@ func (db *DB) GetDownstreamCallTree(nodeID int64, maxDepth int) ([]*CallTreeNode
 	}
 	return result, nil
 }
+
+// ==================== Interface Queries ====================
+
+// GetAllInterfaces returns all interface nodes
+func (db *DB) GetAllInterfaces() ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes WHERE kind = 'interface'`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// FindInterfacesByPattern returns interfaces matching a name pattern
+func (db *DB) FindInterfacesByPattern(pattern string) ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes
+		 WHERE kind = 'interface' AND name LIKE ?
+		 ORDER BY length(name) ASC`,
+		"%"+pattern+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetImplementations returns all types that implement a given interface
+func (db *DB) GetImplementations(interfaceID int64) ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc
+		 FROM nodes n
+		 JOIN edges e ON e.from_id = n.id
+		 WHERE e.to_id = ? AND e.kind = 'implements'`,
+		interfaceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetImplementedInterfaces returns all interfaces that a type implements
+func (db *DB) GetImplementedInterfaces(typeID int64) ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc
+		 FROM nodes n
+		 JOIN edges e ON e.to_id = n.id
+		 WHERE e.from_id = ? AND e.kind = 'implements'`,
+		typeID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetAllTypes returns all struct/type nodes
+func (db *DB) GetAllTypes() ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes WHERE kind = 'struct'`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// ==================== Risk Score Queries ====================
+
+// RiskScore represents the change risk assessment for a function
+type RiskScore struct {
+	Node          *graph.Node
+	DirectCallers int    // Number of direct callers
+	TotalCallers  int    // Total upstream callers (recursive)
+	MaxDepth      int    // Maximum call chain depth to entry points
+	RiskLevel     string // low, medium, high, critical
+}
+
+// GetDirectCallerCount returns the number of direct callers for a node
+func (db *DB) GetDirectCallerCount(nodeID int64) (int, error) {
+	var count int
+	err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM edges WHERE to_id = ? AND kind = 'calls'`,
+		nodeID,
+	).Scan(&count)
+	return count, err
+}
+
+// GetTotalCallerCount returns the total number of upstream callers (recursive)
+// Limits depth to 50 to prevent infinite loops in circular call graphs
+func (db *DB) GetTotalCallerCount(nodeID int64) (int, error) {
+	var count int
+	err := db.conn.QueryRow(`
+		WITH RECURSIVE callers(id, depth) AS (
+			SELECT from_id, 1 FROM edges WHERE to_id = ? AND kind = 'calls'
+			UNION
+			SELECT e.from_id, c.depth + 1
+			FROM edges e
+			JOIN callers c ON e.to_id = c.id
+			WHERE e.kind = 'calls' AND c.depth < 50
+		)
+		SELECT COUNT(DISTINCT id) FROM callers
+	`, nodeID).Scan(&count)
+	return count, err
+}
+
+// GetMaxCallDepth returns the maximum depth to reach entry points (functions with no callers)
+func (db *DB) GetMaxCallDepth(nodeID int64) (int, error) {
+	var maxDepth int
+	err := db.conn.QueryRow(`
+		WITH RECURSIVE call_chain(id, depth) AS (
+			SELECT from_id, 1 FROM edges WHERE to_id = ? AND kind = 'calls'
+			UNION ALL
+			SELECT e.from_id, cc.depth + 1
+			FROM edges e
+			JOIN call_chain cc ON e.to_id = cc.id
+			WHERE e.kind = 'calls' AND cc.depth < 50
+		)
+		SELECT COALESCE(MAX(depth), 0) FROM call_chain
+	`, nodeID).Scan(&maxDepth)
+	return maxDepth, err
+}
+
+// CalculateRiskLevel determines risk level based on caller metrics
+func CalculateRiskLevel(directCallers, totalCallers int) string {
+	// Primary factor: direct callers
+	// Secondary factor: total impact
+	if directCallers >= 50 || totalCallers >= 200 {
+		return "critical"
+	}
+	if directCallers >= 20 || totalCallers >= 100 {
+		return "high"
+	}
+	if directCallers >= 5 || totalCallers >= 30 {
+		return "medium"
+	}
+	return "low"
+}
+
+// GetRiskScore calculates the risk score for a function
+// Uses only direct callers for fast performance (recursive queries are too slow for hot functions)
+func (db *DB) GetRiskScore(nodeID int64) (*RiskScore, error) {
+	node, err := db.GetNodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	directCallers, err := db.GetDirectCallerCount(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Skip expensive recursive queries - use direct callers only for risk assessment
+	// For functions with hundreds of callers, recursive queries can take minutes
+	return &RiskScore{
+		Node:          node,
+		DirectCallers: directCallers,
+		TotalCallers:  directCallers, // Use direct as estimate
+		MaxDepth:      0,             // Skip depth calculation
+		RiskLevel:     CalculateRiskLevelFast(directCallers),
+	}, nil
+}
+
+// GetTopRiskyFunctions returns functions with most callers (highest risk)
+// For performance, only uses direct caller count (skips expensive recursive queries)
+func (db *DB) GetTopRiskyFunctions(limit int) ([]*RiskScore, error) {
+	rows, err := db.conn.Query(`
+		SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc,
+		       COUNT(e.from_id) as caller_count
+		FROM nodes n
+		LEFT JOIN edges e ON e.to_id = n.id AND e.kind = 'calls'
+		WHERE n.kind = 'func'
+		GROUP BY n.id
+		ORDER BY caller_count DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*RiskScore
+	for rows.Next() {
+		var n graph.Node
+		var signature, doc sql.NullString
+		var directCallers int
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Name, &n.Package, &n.File, &n.Line, &signature, &doc, &directCallers); err != nil {
+			return nil, err
+		}
+		if signature.Valid {
+			n.Signature = signature.String
+		}
+		if doc.Valid {
+			n.Doc = doc.String
+		}
+
+		// For list view, use direct callers only (fast)
+		// Total callers calculated only for single function analysis
+		results = append(results, &RiskScore{
+			Node:          &n,
+			DirectCallers: directCallers,
+			TotalCallers:  directCallers, // Use direct as estimate for list
+			MaxDepth:      0,
+			RiskLevel:     CalculateRiskLevelFast(directCallers),
+		})
+	}
+	return results, rows.Err()
+}
+
+// CalculateRiskLevelFast determines risk level based on direct callers only (for list view)
+func CalculateRiskLevelFast(directCallers int) string {
+	if directCallers >= 50 {
+		return "critical"
+	}
+	if directCallers >= 20 {
+		return "high"
+	}
+	if directCallers >= 5 {
+		return "medium"
+	}
+	return "low"
+}

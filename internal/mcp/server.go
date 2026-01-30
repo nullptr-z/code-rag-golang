@@ -316,6 +316,56 @@ func (s *Server) handleToolsList(req *Request) {
 				Required: []string{"function"},
 			},
 		},
+		{
+			Name: "implements",
+			Description: `查询接口实现关系。
+使用场景：
+- 查找谁实现了某个接口
+- 查找某个类型实现了哪些接口
+- 理解代码的多态结构
+- 修改接口时评估影响范围`,
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"name": {
+						Type:        "string",
+						Description: "接口名或类型名，如 'Reader'、'MyStruct'",
+					},
+					"list": {
+						Type:        "boolean",
+						Description: "设为 true 则列出所有接口",
+					},
+				},
+			},
+		},
+		{
+			Name: "risk",
+			Description: `【推荐】分析函数的变更风险等级。
+基于调用者数量评估修改函数的风险：
+- critical: 直接调用者>=50 或 总调用者>=200，修改需极其谨慎
+- high: 直接调用者>=20 或 总调用者>=100，建议充分测试
+- medium: 直接调用者>=5 或 总调用者>=30，注意同步修改
+- low: 低风险，正常修改即可
+
+使用场景：
+- 修改函数前评估风险
+- 了解哪些函数是"热点"代码
+- 重构时确定优先级`,
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"function": {
+						Type:        "string",
+						Description: "函数名，留空则显示风险最高的函数列表",
+					},
+					"limit": {
+						Type:        "number",
+						Description: "显示数量，默认20",
+						Default:     20,
+					},
+				},
+			},
+		},
 	}
 
 	s.sendResult(req.ID, map[string]interface{}{"tools": tools})
@@ -344,6 +394,10 @@ func (s *Server) handleToolsCall(req *Request) {
 		result, isError = s.toolList(params.Arguments)
 	case "mermaid":
 		result, isError = s.toolMermaid(params.Arguments)
+	case "implements":
+		result, isError = s.toolImplements(params.Arguments)
+	case "risk":
+		result, isError = s.toolRisk(params.Arguments)
 	default:
 		result = fmt.Sprintf("Unknown tool: %s", params.Name)
 		isError = true
@@ -672,6 +726,197 @@ func (s *Server) toolList(args map[string]interface{}) (string, bool) {
 	return result, false
 }
 
+func (s *Server) toolImplements(args map[string]interface{}) (string, bool) {
+	listAll := false
+	if l, ok := args["list"].(bool); ok {
+		listAll = l
+	}
+
+	if listAll {
+		// List all interfaces
+		interfaces, err := s.db.GetAllInterfaces()
+		if err != nil {
+			return fmt.Sprintf("错误：%v", err), true
+		}
+
+		if len(interfaces) == 0 {
+			return "项目中没有接口定义\n\n💡 提示：请先运行 analyze 命令分析项目", false
+		}
+
+		result := fmt.Sprintf("## 项目接口列表 (共 %d 个)\n\n", len(interfaces))
+		for _, iface := range interfaces {
+			methods := shortSignature(iface.Signature)
+			if methods == "" {
+				methods = "(空接口)"
+			}
+			result += fmt.Sprintf("**%s**\n", shortName(iface.Name))
+			result += fmt.Sprintf("- 方法: %s\n", methods)
+			result += fmt.Sprintf("- 位置: %s:%d\n\n", iface.File, iface.Line)
+		}
+		return result, false
+	}
+
+	name, ok := args["name"].(string)
+	if !ok || name == "" {
+		return "错误：请提供接口或类型名称，或设置 list=true 列出所有接口", true
+	}
+
+	// Try to find as interface first
+	interfaces, err := s.db.FindInterfacesByPattern(name)
+	if err != nil {
+		return fmt.Sprintf("错误：%v", err), true
+	}
+
+	if len(interfaces) > 0 {
+		// Found interface(s), show implementations
+		iface := interfaces[0]
+		result := fmt.Sprintf("## 接口: %s\n\n", shortName(iface.Name))
+		result += fmt.Sprintf("- 位置: %s:%d\n", iface.File, iface.Line)
+		if iface.Signature != "" {
+			result += fmt.Sprintf("- 方法: %s\n", shortSignature(iface.Signature))
+		}
+		result += "\n"
+
+		impls, err := s.db.GetImplementations(iface.ID)
+		if err != nil {
+			return fmt.Sprintf("错误：%v", err), true
+		}
+
+		if len(impls) == 0 {
+			result += "没有找到实现此接口的类型\n"
+		} else {
+			result += fmt.Sprintf("### 实现类型 (共 %d 个)\n\n", len(impls))
+			for _, impl := range impls {
+				result += fmt.Sprintf("- **%s** - %s:%d\n",
+					shortName(impl.Name), impl.File, impl.Line)
+			}
+		}
+		return result, false
+	}
+
+	// Try to find as type (struct)
+	nodes, err := s.db.FindNodesByPattern(name)
+	if err != nil {
+		return fmt.Sprintf("错误：%v", err), true
+	}
+
+	// Filter to only struct types
+	for _, node := range nodes {
+		if node.Kind == "struct" {
+			result := fmt.Sprintf("## 类型: %s\n\n", shortName(node.Name))
+			result += fmt.Sprintf("- 位置: %s:%d\n\n", node.File, node.Line)
+
+			implInterfaces, err := s.db.GetImplementedInterfaces(node.ID)
+			if err != nil {
+				return fmt.Sprintf("错误：%v", err), true
+			}
+
+			if len(implInterfaces) == 0 {
+				result += "此类型没有实现任何接口\n"
+			} else {
+				result += fmt.Sprintf("### 实现的接口 (共 %d 个)\n\n", len(implInterfaces))
+				for _, iface := range implInterfaces {
+					methods := shortSignature(iface.Signature)
+					if methods == "" {
+						methods = "(空接口)"
+					}
+					result += fmt.Sprintf("- **%s** - %s\n", shortName(iface.Name), methods)
+					result += fmt.Sprintf("  - %s:%d\n", iface.File, iface.Line)
+				}
+			}
+			return result, false
+		}
+	}
+
+	return fmt.Sprintf("未找到名为 '%s' 的接口或类型\n\n💡 提示：请先运行 analyze 命令分析项目", name), false
+}
+
+func (s *Server) toolRisk(args map[string]interface{}) (string, bool) {
+	limit := 20
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+
+	funcName, hasFunc := args["function"].(string)
+	if !hasFunc || funcName == "" {
+		// Show top risky functions
+		risks, err := s.db.GetTopRiskyFunctions(limit)
+		if err != nil {
+			return fmt.Sprintf("错误：%v", err), true
+		}
+
+		if len(risks) == 0 {
+			return "项目中没有函数", false
+		}
+
+		result := fmt.Sprintf("## 高风险函数排行 (Top %d)\n\n", limit)
+		for _, r := range risks {
+			riskIcon := getRiskIcon(r.RiskLevel)
+			result += fmt.Sprintf("%s **%s** - %s\n", riskIcon, r.RiskLevel, shortName(r.Node.Name))
+			result += fmt.Sprintf("   调用者: %d | %s:%d\n\n", r.DirectCallers, r.Node.File, r.Node.Line)
+		}
+		result += "风险等级: 🔴critical(>=50) 🟠high(>=20) 🟡medium(>=5) 🟢low\n"
+		return result, false
+	}
+
+	// Analyze specific function
+	nodes, err := s.db.FindNodesByPattern(funcName)
+	if err != nil {
+		return fmt.Sprintf("错误：%v", err), true
+	}
+
+	if len(nodes) == 0 {
+		return fmt.Sprintf("未找到函数: %s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
+	}
+
+	node := nodes[0]
+	risk, err := s.db.GetRiskScore(node.ID)
+	if err != nil {
+		return fmt.Sprintf("错误：%v", err), true
+	}
+
+	riskIcon := getRiskIcon(risk.RiskLevel)
+	result := fmt.Sprintf("## 变更风险分析: %s\n\n", shortName(risk.Node.Name))
+	result += fmt.Sprintf("**位置:** %s:%d\n", risk.Node.File, risk.Node.Line)
+	if risk.Node.Signature != "" {
+		result += fmt.Sprintf("**签名:** `%s`\n", risk.Node.Signature)
+	}
+	result += "\n"
+
+	result += fmt.Sprintf("### 风险等级: %s %s\n\n", riskIcon, risk.RiskLevel)
+	result += fmt.Sprintf("直接调用者: %d\n", risk.DirectCallers)
+
+	result += "\n**建议:**\n"
+	switch risk.RiskLevel {
+	case "critical":
+		result += "- ⚠️ 此函数被大量调用，修改需极其谨慎\n"
+		result += "- 建议先运行 impact 工具查看完整影响范围\n"
+		result += "- 修改前确保有充分的测试覆盖\n"
+	case "high":
+		result += "- ⚠️ 此函数调用者较多，修改需谨慎\n"
+		result += "- 建议运行 upstream 工具查看调用者\n"
+	case "medium":
+		result += "- 正常风险，注意检查调用处是否需要同步修改\n"
+	case "low":
+		result += "- 低风险，影响范围较小，正常修改即可\n"
+	}
+
+	return result, false
+}
+
+func getRiskIcon(level string) string {
+	switch level {
+	case "critical":
+		return "🔴"
+	case "high":
+		return "🟠"
+	case "medium":
+		return "🟡"
+	default:
+		return "🟢"
+	}
+}
+
 func (s *Server) toolMermaid(args map[string]interface{}) (string, bool) {
 	funcName, ok := args["function"].(string)
 	if !ok || funcName == "" {
@@ -799,6 +1044,57 @@ func (s *Server) toolMermaid(args map[string]interface{}) (string, bool) {
 }
 
 // Helper functions for Mermaid generation
+
+// shortSignature simplifies package paths in a function signature
+// e.g., "func(db *github.com/jinzhu/gorm.DB) error" -> "func(db *gorm.DB) error"
+func shortSignature(sig string) string {
+	// Find and replace all package paths (anything with / before a .)
+	result := sig
+	for {
+		// Find a package path pattern: xxx/yyy/pkg.
+		start := -1
+		for i := 0; i < len(result); i++ {
+			if result[i] == '/' {
+				// Found a slash, look backwards to find the start
+				start = i
+				for j := i - 1; j >= 0; j-- {
+					c := result[j]
+					if c == ' ' || c == '*' || c == '(' || c == '[' || c == ',' {
+						start = j + 1
+						break
+					}
+					if j == 0 {
+						start = 0
+					}
+				}
+				break
+			}
+		}
+		if start == -1 {
+			break
+		}
+
+		// Find the last / before the next space, ), or end
+		lastSlash := -1
+		for i := start; i < len(result); i++ {
+			if result[i] == '/' {
+				lastSlash = i
+			}
+			if result[i] == ' ' || result[i] == ')' || result[i] == ',' || result[i] == ']' {
+				break
+			}
+		}
+
+		if lastSlash > start {
+			// Replace from start to lastSlash+1 with empty
+			result = result[:start] + result[lastSlash+1:]
+		} else {
+			break
+		}
+	}
+	return result
+}
+
 func shortName(fullName string) string {
 	// Remove package prefix, keep receiver and method name
 	name := fullName

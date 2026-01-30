@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/callgraph"
@@ -15,6 +16,7 @@ import (
 type Builder struct {
 	fset          *token.FileSet
 	pkgs          []*packages.Package
+	projectRoot   string            // project root directory for relative paths
 	projectPkgs   map[string]bool   // project package paths (to filter out dependencies)
 	targetPkgs    map[string]bool   // target packages to insert (nil means all)
 	nodeMap       map[string]int64  // maps function name to node ID
@@ -27,6 +29,7 @@ type Builder struct {
 func NewBuilder(
 	fset *token.FileSet,
 	pkgs []*packages.Package,
+	projectRoot string,
 	insertFn func(*Node) (int64, error),
 	edgeFn func(*Edge) error,
 ) *Builder {
@@ -38,9 +41,13 @@ func NewBuilder(
 		}
 	}
 
+	// Get absolute path for projectRoot
+	absRoot, _ := filepath.Abs(projectRoot)
+
 	return &Builder{
 		fset:          fset,
 		pkgs:          pkgs,
+		projectRoot:   absRoot,
 		projectPkgs:   projectPkgs,
 		targetPkgs:    nil, // nil means insert all packages
 		nodeMap:       make(map[string]int64),
@@ -247,11 +254,19 @@ func (b *Builder) createFunctionNode(fn *ssa.Function) (int64, error) {
 	// Build fully qualified name
 	name := fn.String()
 
+	// Convert file path to relative path
+	filePath := pos.Filename
+	if b.projectRoot != "" && filePath != "" {
+		if rel, err := filepath.Rel(b.projectRoot, filePath); err == nil {
+			filePath = rel
+		}
+	}
+
 	node := &Node{
 		Kind:      NodeKindFunc,
 		Name:      name,
 		Package:   pkgPath,
-		File:      pos.Filename,
+		File:      filePath,
 		Line:      pos.Line,
 		Signature: sig,
 		Doc:       doc,

@@ -262,6 +262,7 @@ func (w *Watcher) runAnalysis() (nodeCount, edgeCount int64, err error) {
 	builder := graph.NewBuilder(
 		prog.Fset,
 		pkgs,
+		w.projectPath,
 		db.InsertNode,
 		db.InsertEdge,
 	)

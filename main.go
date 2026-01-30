@@ -45,7 +45,7 @@ func main() {
 	rootCmd.AddCommand(exportCmd())
 	rootCmd.AddCommand(mcpCmd())
 	rootCmd.AddCommand(watchCmd())
-	rootCmd.AddCommand(serveCmd())
+	rootCmd.AddCommand(viewCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -120,16 +120,19 @@ func analyzeCmd() *cobra.Command {
 			if incremental && len(changedPackages) > 0 {
 				fullPkgPaths := make([]string, 0, len(changedPackages))
 				for _, relativePath := range changedPackages {
-					// Find matching package by directory
+					// Remove leading "./" from relative path
+					// e.g., "./controllers/chatroom/pk" -> "controllers/chatroom/pk"
+					suffix := strings.TrimPrefix(relativePath, "./")
+					if suffix == "" {
+						suffix = "."
+					}
+
+					// Find matching package by checking if package path ends with the relative path
 					for _, pkg := range pkgs {
 						if pkg.PkgPath != "" {
-							// Extract the last component of package path
-							// e.g., "github.com/example/mockproject/pkg05" -> "pkg05"
-							parts := strings.Split(pkg.PkgPath, "/")
-							lastPart := parts[len(parts)-1]
-
-							// Match against relative path (e.g., "./pkg05")
-							if relativePath == "./"+lastPart || relativePath == lastPart {
+							// Check if package path ends with the relative path
+							// e.g., "github.com/xxx/controllers/chatroom/pk" ends with "controllers/chatroom/pk"
+							if strings.HasSuffix(pkg.PkgPath, "/"+suffix) || strings.HasSuffix(pkg.PkgPath, suffix) {
 								fullPkgPaths = append(fullPkgPaths, pkg.PkgPath)
 								break
 							}
@@ -184,6 +187,7 @@ func analyzeCmd() *cobra.Command {
 			builder := graph.NewBuilder(
 				prog.Fset,
 				pkgs,
+				projectPath,
 				db.InsertNode,
 				db.InsertEdge,
 			)
@@ -242,7 +246,7 @@ func upstreamCmd() *cobra.Command {
 					if len(nodes) > 1 {
 						fmt.Println("找到多个匹配的函数，请选择:")
 						for i, n := range nodes {
-							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, n.Name, n.File, n.Line)
+							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
 						}
 						fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
@@ -282,15 +286,28 @@ func upstreamCmd() *cobra.Command {
 					}
 				}
 			default:
-				fmt.Printf("上游调用者 (%s):\n", report.Target.Name)
-				for _, c := range report.DirectCallers {
-					fmt.Printf("  [直接] %s (%s:%d)\n", c.Name, c.File, c.Line)
+				// Get call tree
+				callTree, err := db.GetUpstreamCallTree(report.Target.ID, depth)
+				if err != nil {
+					return fmt.Errorf("获取调用树失败: %w", err)
 				}
-				for _, c := range report.IndirectCallers {
-					fmt.Printf("  [间接] %s (%s:%d)\n", c.Name, c.File, c.Line)
-				}
-				if len(report.DirectCallers) == 0 && len(report.IndirectCallers) == 0 {
-					fmt.Println("  (无上游调用者)")
+
+				// Calculate max width and depth for alignment
+				maxWidth := len(shortFuncName(report.Target.Name))
+				maxDepth := 0
+				calcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
+
+				fmt.Println("📍 当前函数")
+				// Target function gets extra padding to align with deepest tree item
+				targetPadding := maxWidth + maxDepth*4
+				fmt.Printf("%-*s  %s:%d\n\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+
+				if len(callTree) > 0 {
+					fmt.Printf("⬆️ 调用者 (深度 %d)\n", depth)
+					printCallTree(callTree, "", true, maxWidth, maxDepth, 0)
+				} else {
+					fmt.Println("⬆️ 调用者")
+					fmt.Println("└── (无)")
 				}
 			}
 
@@ -298,7 +315,7 @@ func upstreamCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVar(&depth, "depth", 10, "递归深度 (0=无限)")
+	cmd.Flags().IntVar(&depth, "depth", 7, "递归深度 (0=无限)")
 	cmd.Flags().StringVar(&format, "format", "text", "输出格式 (text/json/markdown)")
 
 	return cmd
@@ -330,7 +347,7 @@ func downstreamCmd() *cobra.Command {
 					if len(nodes) > 1 {
 						fmt.Println("找到多个匹配的函数，请选择:")
 						for i, n := range nodes {
-							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, n.Name, n.File, n.Line)
+							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
 						}
 						fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
@@ -370,15 +387,28 @@ func downstreamCmd() *cobra.Command {
 					}
 				}
 			default:
-				fmt.Printf("下游依赖 (%s):\n", report.Target.Name)
-				for _, c := range report.DirectCallees {
-					fmt.Printf("  [直接] %s (%s:%d)\n", c.Name, c.File, c.Line)
+				// Get call tree
+				callTree, err := db.GetDownstreamCallTree(report.Target.ID, depth)
+				if err != nil {
+					return fmt.Errorf("获取调用树失败: %w", err)
 				}
-				for _, c := range report.IndirectCallees {
-					fmt.Printf("  [间接] %s (%s:%d)\n", c.Name, c.File, c.Line)
-				}
-				if len(report.DirectCallees) == 0 && len(report.IndirectCallees) == 0 {
-					fmt.Println("  (无下游依赖)")
+
+				// Calculate max width and depth for alignment
+				maxWidth := len(shortFuncName(report.Target.Name))
+				maxDepth := 0
+				calcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
+
+				fmt.Println("📍 当前函数")
+				// Target function gets extra padding to align with deepest tree item
+				targetPadding := maxWidth + maxDepth*4
+				fmt.Printf("%-*s  %s:%d\n\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+
+				if len(callTree) > 0 {
+					fmt.Printf("⬇️ 被调用 (深度 %d)\n", depth)
+					printCallTree(callTree, "", false, maxWidth, maxDepth, 0)
+				} else {
+					fmt.Println("⬇️ 被调用")
+					fmt.Println("└── (无)")
 				}
 			}
 
@@ -386,7 +416,7 @@ func downstreamCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVar(&depth, "depth", 10, "递归深度 (0=无限)")
+	cmd.Flags().IntVar(&depth, "depth", 7, "递归深度 (0=无限)")
 	cmd.Flags().StringVar(&format, "format", "text", "输出格式 (text/json/markdown)")
 
 	return cmd
@@ -420,7 +450,7 @@ func impactCmd() *cobra.Command {
 					if len(nodes) > 1 {
 						fmt.Println("找到多个匹配的函数，请选择:")
 						for i, n := range nodes {
-							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, n.Name, n.File, n.Line)
+							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
 						}
 						fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
@@ -449,17 +479,63 @@ func impactCmd() *cobra.Command {
 			case "markdown":
 				fmt.Print(report.FormatMarkdown())
 			default:
-				fmt.Println(report.Summary())
+				// Get call trees
+				upstreamTree, err := db.GetUpstreamCallTree(report.Target.ID, upstreamDepth)
+				if err != nil {
+					return fmt.Errorf("获取上游调用树失败: %w", err)
+				}
+				downstreamTree, err := db.GetDownstreamCallTree(report.Target.ID, downstreamDepth)
+				if err != nil {
+					return fmt.Errorf("获取下游调用树失败: %w", err)
+				}
+
+				// Calculate max width and depth for alignment
+				maxWidth := len(shortFuncName(report.Target.Name))
+				upstreamMaxDepth := 0
+				downstreamMaxDepth := 0
+				calcTreeMaxWidth(upstreamTree, &maxWidth, 0, &upstreamMaxDepth)
+				calcTreeMaxWidth(downstreamTree, &maxWidth, 0, &downstreamMaxDepth)
+
+				// Print target function
+				fmt.Println("📍 当前函数")
+				// Use the larger maxDepth for target function alignment
+				targetMaxDepth := upstreamMaxDepth
+				if downstreamMaxDepth > targetMaxDepth {
+					targetMaxDepth = downstreamMaxDepth
+				}
+				targetPadding := maxWidth + targetMaxDepth*4
+				fmt.Printf("%-*s  %s:%d\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+				if report.Target.Signature != "" {
+					fmt.Printf("   %s\n", shortSignature(report.Target.Signature))
+				}
 				fmt.Println()
-				fmt.Print(report.FormatMarkdown())
+
+				// Print upstream callers
+				if len(upstreamTree) > 0 {
+					fmt.Printf("⬆️ 调用者 (深度 %d)\n", upstreamDepth)
+					printCallTree(upstreamTree, "", true, maxWidth, upstreamMaxDepth, 0)
+				} else {
+					fmt.Println("⬆️ 调用者")
+					fmt.Println("└── (无)")
+				}
+				fmt.Println()
+
+				// Print downstream callees
+				if len(downstreamTree) > 0 {
+					fmt.Printf("⬇️ 被调用 (深度 %d)\n", downstreamDepth)
+					printCallTree(downstreamTree, "", false, maxWidth, downstreamMaxDepth, 0)
+				} else {
+					fmt.Println("⬇️ 被调用")
+					fmt.Println("└── (无)")
+				}
 			}
 
 			return nil
 		},
 	}
 
-	cmd.Flags().IntVar(&upstreamDepth, "upstream-depth", 3, "上游递归深度")
-	cmd.Flags().IntVar(&downstreamDepth, "downstream-depth", 2, "下游递归深度")
+	cmd.Flags().IntVar(&upstreamDepth, "upstream-depth", 7, "上游递归深度")
+	cmd.Flags().IntVar(&downstreamDepth, "downstream-depth", 7, "下游递归深度")
 	cmd.Flags().StringVar(&format, "format", "text", "输出格式 (text/json/markdown)")
 
 	return cmd
@@ -544,6 +620,129 @@ func outputJSON(v interface{}) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// shortFuncName simplifies a fully qualified function name
+// e.g., "(*github.com/foo/bar/pkg.Type).Method" -> "(*pkg.Type).Method"
+func shortFuncName(fullName string) string {
+	// Check for method receiver prefix like "(* or "("
+	prefix := ""
+	name := fullName
+	if strings.HasPrefix(name, "(*") {
+		prefix = "(*"
+		name = name[2:]
+	} else if strings.HasPrefix(name, "(") {
+		prefix = "("
+		name = name[1:]
+	}
+
+	// Find the last "/" and take everything after it
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+
+	return prefix + name
+}
+
+// shortFilePath returns the file path as-is (already relative to project root)
+func shortFilePath(fullPath string) string {
+	return fullPath
+}
+
+// shortSignature simplifies package paths in a function signature
+// e.g., "func(db *github.com/jinzhu/gorm.DB) error" -> "func(db *gorm.DB) error"
+func shortSignature(sig string) string {
+	// Find and replace all package paths (anything with / before a .)
+	// Pattern: something/something/pkg.Type -> pkg.Type
+	result := sig
+	for {
+		// Find a package path pattern: xxx/yyy/pkg.
+		start := -1
+		for i := 0; i < len(result); i++ {
+			if result[i] == '/' {
+				// Found a slash, look backwards to find the start
+				start = i
+				for j := i - 1; j >= 0; j-- {
+					c := result[j]
+					if c == ' ' || c == '*' || c == '(' || c == '[' || c == ',' {
+						start = j + 1
+						break
+					}
+					if j == 0 {
+						start = 0
+					}
+				}
+				break
+			}
+		}
+		if start == -1 {
+			break
+		}
+
+		// Find the last / before the next space, ), or end
+		lastSlash := -1
+		for i := start; i < len(result); i++ {
+			if result[i] == '/' {
+				lastSlash = i
+			}
+			if result[i] == ' ' || result[i] == ')' || result[i] == ',' || result[i] == ']' {
+				break
+			}
+		}
+
+		if lastSlash > start {
+			// Replace from start to lastSlash+1 with empty
+			result = result[:start] + result[lastSlash+1:]
+		} else {
+			break
+		}
+	}
+	return result
+}
+
+// calcTreeMaxWidth calculates the maximum function name width and depth for alignment in the call tree
+func calcTreeMaxWidth(tree []*storage.CallTreeNode, maxWidth *int, currentDepth int, maxDepth *int) {
+	if currentDepth > *maxDepth {
+		*maxDepth = currentDepth
+	}
+	for _, node := range tree {
+		w := len(shortFuncName(node.Node.Name))
+		if w > *maxWidth {
+			*maxWidth = w
+		}
+		if len(node.Children) > 0 {
+			calcTreeMaxWidth(node.Children, maxWidth, currentDepth+1, maxDepth)
+		}
+	}
+}
+
+// printCallTree prints the call tree with proper indentation (function name first, then path)
+// maxDepth is the maximum depth of the tree, currentDepth is the current level (0-indexed)
+// maxWidth is the maximum function name width
+func printCallTree(tree []*storage.CallTreeNode, indent string, isUpstream bool, maxWidth int, maxDepth int, currentDepth int) {
+	for i, node := range tree {
+		isLast := i == len(tree)-1
+		prefix := "├──"
+		if isLast {
+			prefix = "└──"
+		}
+
+		funcName := shortFuncName(node.Node.Name)
+		loc := fmt.Sprintf("%s:%d", shortFilePath(node.Node.File), node.Node.Line)
+		// Adjust padding to account for depth: deeper items have more indent, so need less funcName padding
+		// Total column width = (maxDepth+1)*4 + maxWidth, current prefix width = (currentDepth+1)*4
+		// So funcName padding = maxWidth + (maxDepth - currentDepth)*4
+		padding := maxWidth + (maxDepth-currentDepth)*4
+		fmt.Printf("%s%s %-*s  %s\n", indent, prefix, padding, funcName, loc)
+
+		if len(node.Children) > 0 {
+			childIndent := indent + "│   "
+			if isLast {
+				childIndent = indent + "    "
+			}
+			printCallTree(node.Children, childIndent, isUpstream, maxWidth, maxDepth, currentDepth+1)
+		}
+	}
 }
 
 func exportCmd() *cobra.Command {
@@ -753,6 +952,7 @@ func runInitialAnalysis(projectPath, dbPath string) (nodeCount, edgeCount int64,
 	builder := graph.NewBuilder(
 		prog.Fset,
 		pkgs,
+		projectPath,
 		db.InsertNode,
 		db.InsertEdge,
 	)
@@ -765,11 +965,11 @@ func runInitialAnalysis(projectPath, dbPath string) (nodeCount, edgeCount int64,
 	return nodeCount, edgeCount, nil
 }
 
-func serveCmd() *cobra.Command {
+func viewCmd() *cobra.Command {
 	var port int
 
 	cmd := &cobra.Command{
-		Use:   "serve",
+		Use:   "view",
 		Short: "启动 Web UI 可视化调用图",
 		Long: `启动一个本地 Web 服务器，提供交互式的调用图可视化界面。
 
@@ -780,9 +980,9 @@ func serveCmd() *cobra.Command {
   - 节点详情面板
 
 示例：
-  crag serve              # 使用默认端口 8080
-  crag serve -p 3000      # 指定端口
-  crag serve -d my.db     # 指定数据库`,
+  crag view              # 使用默认端口 9998
+  crag view -p 3000      # 指定端口
+  crag view -d my.db     # 指定数据库`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			db, err := storage.Open(dbPath)
 			if err != nil {

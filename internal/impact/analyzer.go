@@ -105,11 +105,33 @@ func (a *Analyzer) AnalyzeImpact(funcName string, upstreamDepth, downstreamDepth
 	return report, nil
 }
 
+// shortName simplifies a fully qualified function name
+// e.g., "(*github.com/foo/bar/pkg.Type).Method" -> "(*pkg.Type).Method"
+func shortName(fullName string) string {
+	// Check for method receiver prefix like "(* or "("
+	prefix := ""
+	name := fullName
+	if strings.HasPrefix(name, "(*") {
+		prefix = "(*"
+		name = name[2:]
+	} else if strings.HasPrefix(name, "(") {
+		prefix = "("
+		name = name[1:]
+	}
+
+	// Find the last "/" and take everything after it
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+
+	return prefix + name
+}
+
 // FormatMarkdown formats the impact report as markdown
 func (r *ImpactReport) FormatMarkdown() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("## 变更影响分析: %s\n\n", r.Target.Name))
+	sb.WriteString(fmt.Sprintf("## 变更影响分析: %s\n\n", shortName(r.Target.Name)))
 	sb.WriteString(fmt.Sprintf("**位置:** %s:%d\n\n", r.Target.File, r.Target.Line))
 
 	if r.Target.Signature != "" {
@@ -128,7 +150,7 @@ func (r *ImpactReport) FormatMarkdown() string {
 		sb.WriteString("| 函数 | 文件 | 行号 |\n")
 		sb.WriteString("|------|------|------|\n")
 		for _, c := range r.DirectCallers {
-			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line))
+			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", shortName(c.Name), c.File, c.Line))
 		}
 		sb.WriteString("\n")
 	}
@@ -139,7 +161,7 @@ func (r *ImpactReport) FormatMarkdown() string {
 		sb.WriteString("| 函数 | 文件 | 行号 |\n")
 		sb.WriteString("|------|------|------|\n")
 		for _, c := range r.IndirectCallers {
-			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line))
+			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", shortName(c.Name), c.File, c.Line))
 		}
 		sb.WriteString("\n")
 	}
@@ -152,7 +174,7 @@ func (r *ImpactReport) FormatMarkdown() string {
 		sb.WriteString("| 函数 | 文件 | 行号 |\n")
 		sb.WriteString("|------|------|------|\n")
 		for _, c := range r.DirectCallees {
-			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line))
+			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", shortName(c.Name), c.File, c.Line))
 		}
 		sb.WriteString("\n")
 	}
@@ -163,7 +185,7 @@ func (r *ImpactReport) FormatMarkdown() string {
 		sb.WriteString("| 函数 | 文件 | 行号 |\n")
 		sb.WriteString("|------|------|------|\n")
 		for _, c := range r.IndirectCallees {
-			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line))
+			sb.WriteString(fmt.Sprintf("| %s | %s | %d |\n", shortName(c.Name), c.File, c.Line))
 		}
 		sb.WriteString("\n")
 	}
@@ -171,11 +193,89 @@ func (r *ImpactReport) FormatMarkdown() string {
 	return sb.String()
 }
 
-// FormatJSON formats the impact report as JSON (use encoding/json for actual serialization)
+// FormatTree formats the impact report as a tree structure
+func (r *ImpactReport) FormatTree() string {
+	var sb strings.Builder
+
+	// Collect all items and calculate max width for alignment
+	allCallers := append(r.DirectCallers, r.IndirectCallers...)
+	allCallees := append(r.DirectCallees, r.IndirectCallees...)
+
+	maxWidth := len(fmt.Sprintf("%s:%d", shortPath(r.Target.File), r.Target.Line))
+	for _, c := range allCallers {
+		w := len(fmt.Sprintf("%s:%d", shortPath(c.File), c.Line))
+		if w > maxWidth {
+			maxWidth = w
+		}
+	}
+	for _, c := range allCallees {
+		w := len(fmt.Sprintf("%s:%d", shortPath(c.File), c.Line))
+		if w > maxWidth {
+			maxWidth = w
+		}
+	}
+
+	// Target function
+	sb.WriteString("📍 当前函数\n")
+	sb.WriteString(fmt.Sprintf("%-*s  %s\n", maxWidth, fmt.Sprintf("%s:%d", shortPath(r.Target.File), r.Target.Line), shortName(r.Target.Name)))
+	if r.Target.Signature != "" {
+		sb.WriteString(fmt.Sprintf("   %s\n", r.Target.Signature))
+	}
+	sb.WriteString("\n")
+
+	// Upstream callers
+	callerCount := len(allCallers)
+	if callerCount > 0 {
+		sb.WriteString(fmt.Sprintf("⬆️ 调用者 (共 %d 个)\n", callerCount))
+		for i, c := range allCallers {
+			prefix := "├──"
+			if i == len(allCallers)-1 {
+				prefix = "└──"
+			}
+			loc := fmt.Sprintf("%s:%d", shortPath(c.File), c.Line)
+			sb.WriteString(fmt.Sprintf("%s %-*s  %s\n", prefix, maxWidth, loc, shortName(c.Name)))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("⬆️ 调用者\n")
+		sb.WriteString("└── (无)\n\n")
+	}
+
+	// Downstream callees
+	calleeCount := len(allCallees)
+	if calleeCount > 0 {
+		sb.WriteString(fmt.Sprintf("⬇️ 被调用 (共 %d 个)\n", calleeCount))
+		for i, c := range allCallees {
+			prefix := "├──"
+			if i == len(allCallees)-1 {
+				prefix = "└──"
+			}
+			loc := fmt.Sprintf("%s:%d", shortPath(c.File), c.Line)
+			sb.WriteString(fmt.Sprintf("%s %-*s  %s\n", prefix, maxWidth, loc, shortName(c.Name)))
+		}
+	} else {
+		sb.WriteString("⬇️ 被调用\n")
+		sb.WriteString("└── (无)\n")
+	}
+
+	return sb.String()
+}
+
+// shortPath extracts the last two path components
+// e.g., "internal/livepk/livepk.go" -> "livepk/livepk.go"
+func shortPath(fullPath string) string {
+	parts := strings.Split(fullPath, "/")
+	if len(parts) <= 2 {
+		return fullPath
+	}
+	return strings.Join(parts[len(parts)-2:], "/")
+}
+
+// Summary returns a brief summary of the impact report
 func (r *ImpactReport) Summary() string {
 	return fmt.Sprintf(
 		"Target: %s, Direct Callers: %d, Indirect Callers: %d, Direct Callees: %d, Indirect Callees: %d",
-		r.Target.Name,
+		shortName(r.Target.Name),
 		len(r.DirectCallers),
 		len(r.IndirectCallers),
 		len(r.DirectCallees),

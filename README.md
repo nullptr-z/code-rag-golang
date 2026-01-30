@@ -113,7 +113,7 @@ crag list -d .crag.db --limit 20
 crag watch . -d .crag.db
 
 # 9. Start Web UI visualization (interactive call graph)
-crag serve -d .crag.db
+crag view -d .crag.db
 ```
 
 ## Command Details
@@ -221,12 +221,12 @@ crag watch . --debounce 1000
 - Ignores test files (`*_test.go`)
 - Ignores hidden directories, `vendor`, `node_modules`, etc.
 
-### `serve` - Web UI Visualization
+### `view` - Web UI Visualization
 
 Start a local web server providing an interactive call graph visualization interface:
 
 ```bash
-crag serve [flags]
+crag view [flags]
 
 Flags:
   -p, --port int   Server port (default 9998)
@@ -236,10 +236,10 @@ Flags:
 
 ```bash
 # Use default port 9998
-crag serve -d .crag.db
+crag view -d .crag.db
 
 # Specify port
-crag serve -d .crag.db -p 3000
+crag view -d .crag.db -p 3000
 ```
 
 **Features:**

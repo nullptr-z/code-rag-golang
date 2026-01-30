@@ -407,3 +407,73 @@ func scanNodes(rows *sql.Rows) ([]*graph.Node, error) {
 	}
 	return nodes, rows.Err()
 }
+
+// CallTreeNode represents a node in the call tree with its children
+type CallTreeNode struct {
+	Node     *graph.Node
+	Children []*CallTreeNode
+}
+
+// GetUpstreamCallTree builds a tree of upstream callers
+func (db *DB) GetUpstreamCallTree(nodeID int64, maxDepth int) ([]*CallTreeNode, error) {
+	// Get direct callers
+	callers, err := db.GetDirectCallers(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if maxDepth == 1 || len(callers) == 0 {
+		// Convert to tree nodes without children
+		result := make([]*CallTreeNode, len(callers))
+		for i, c := range callers {
+			result[i] = &CallTreeNode{Node: c}
+		}
+		return result, nil
+	}
+
+	// Recursively build tree
+	result := make([]*CallTreeNode, len(callers))
+	for i, c := range callers {
+		children, err := db.GetUpstreamCallTree(c.ID, maxDepth-1)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = &CallTreeNode{
+			Node:     c,
+			Children: children,
+		}
+	}
+	return result, nil
+}
+
+// GetDownstreamCallTree builds a tree of downstream callees
+func (db *DB) GetDownstreamCallTree(nodeID int64, maxDepth int) ([]*CallTreeNode, error) {
+	// Get direct callees
+	callees, err := db.GetDirectCallees(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if maxDepth == 1 || len(callees) == 0 {
+		// Convert to tree nodes without children
+		result := make([]*CallTreeNode, len(callees))
+		for i, c := range callees {
+			result[i] = &CallTreeNode{Node: c}
+		}
+		return result, nil
+	}
+
+	// Recursively build tree
+	result := make([]*CallTreeNode, len(callees))
+	for i, c := range callees {
+		children, err := db.GetDownstreamCallTree(c.ID, maxDepth-1)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = &CallTreeNode{
+			Node:     c,
+			Children: children,
+		}
+	}
+	return result, nil
+}

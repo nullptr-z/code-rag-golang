@@ -48,10 +48,26 @@ func (db *DB) GetNodeByID(id int64) (*graph.Node, error) {
 }
 
 // FindNodesByPattern returns nodes matching a name pattern (using LIKE)
+// Results are sorted by match quality: exact short name match > ends with pattern > contains pattern
 func (db *DB) FindNodesByPattern(pattern string) ([]*graph.Node, error) {
+	// Use a query that sorts by match quality:
+	// 1. Exact match on short name (after last dot or after ").")
+	// 2. Name ends with the pattern (e.g., "pkg.FuncName" matches "FuncName")
+	// 3. Name contains the pattern anywhere
 	rows, err := db.conn.Query(
-		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes WHERE name LIKE ?`,
-		"%"+pattern+"%",
+		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes
+		 WHERE name LIKE ?
+		 ORDER BY
+			CASE
+				-- Exact match on short name: name ends with ".pattern" or ").pattern"
+				WHEN name LIKE '%.' || ? OR name LIKE '%).' || ? THEN 0
+				-- Name ends with the pattern
+				WHEN name LIKE '%' || ? THEN 1
+				-- Contains pattern
+				ELSE 2
+			END,
+			length(name) ASC`,
+		"%"+pattern+"%", pattern, pattern, pattern,
 	)
 	if err != nil {
 		return nil, err

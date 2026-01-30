@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRAG - MCP 配置生成器</title>
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --bg-input: #0d1117;
+      --border-color: #30363d;
+      --border-focus: #58a6ff;
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --accent-blue: #58a6ff;
+      --accent-green: #3fb950;
+      --accent-orange: #f0883e;
+      --accent-purple: #a371f7;
+      --accent-cyan: #39c5cf;
+      --accent-red: #f85149;
+      --gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --gradient-2: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      --gradient-3: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.4);
+      --shadow-glow: 0 0 20px rgba(88, 166, 255, 0.15);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      padding: 40px 20px;
+      background-image:
+        radial-gradient(ellipse at top left, rgba(88, 166, 255, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at bottom right, rgba(167, 113, 247, 0.08) 0%, transparent 50%);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .logo-icon {
+      font-size: 48px;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+    }
+
+    .logo-text {
+      font-size: 36px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -1px;
+    }
+
+    .header-subtitle {
+      font-size: 18px;
+      color: var(--text-secondary);
+      font-weight: 400;
+    }
+
+    /* Navigation */
+    .nav-links {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-top: 24px;
+    }
+
+    .nav-link {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 14px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+
+    .nav-link:hover {
+      color: var(--accent-blue);
+      background: rgba(88, 166, 255, 0.1);
+    }
+
+    .nav-link.active {
+      color: var(--accent-cyan);
+      background: rgba(57, 197, 207, 0.1);
+    }
+
+    /* Card */
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-lg);
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .card:hover {
+      border-color: rgba(88, 166, 255, 0.3);
+      box-shadow: var(--shadow-lg), var(--shadow-glow);
+    }
+
+    .card-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-title-icon {
+      font-size: 24px;
+    }
+
+    .card-description {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+
+    /* Form */
+    .form-group {
+      margin-bottom: 24px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+    .form-label .required {
+      color: var(--accent-red);
+      margin-left: 4px;
+    }
+
+    .form-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 14px 18px;
+      background: var(--bg-input);
+      border: 2px solid var(--border-color);
+      border-radius: 12px;
+      color: var(--text-primary);
+      font-size: 15px;
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .form-input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.15);
+    }
+
+    .form-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .form-input:hover:not(:focus) {
+      border-color: rgba(88, 166, 255, 0.5);
+    }
+
+    /* Input with icon */
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-icon {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 18px;
+      pointer-events: none;
+    }
+
+    .input-wrapper .form-input {
+      padding-left: 48px;
+    }
+
+    /* Checkbox */
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .checkbox-group:hover {
+      background: rgba(88, 166, 255, 0.1);
+    }
+
+    .checkbox-input {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--accent-cyan);
+      cursor: pointer;
+    }
+
+    .checkbox-label {
+      font-size: 14px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .checkbox-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Buttons */
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 14px 28px;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      color: white;
+      box-shadow: 0 4px 15px rgba(88, 166, 255, 0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(88, 166, 255, 0.4);
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent-blue);
+      background: rgba(88, 166, 255, 0.1);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, var(--accent-green), #2ea043);
+      color: white;
+    }
+
+    .btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(63, 185, 80, 0.4);
+    }
+
+    /* Output section */
+    .output-section {
+      margin-top: 32px;
+    }
+
+    .output-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      background: var(--bg-tertiary);
+      padding: 4px;
+      border-radius: 12px;
+      width: fit-content;
+    }
+
+    .output-tab {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .output-tab:hover {
+      color: var(--text-primary);
+    }
+
+    .output-tab.active {
+      background: var(--bg-secondary);
+      color: var(--accent-cyan);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .output-content {
+      position: relative;
+    }
+
+    .output-code {
+      background: var(--bg-input);
+      border: 2px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      overflow-x: auto;
+      white-space: pre;
+      min-height: 200px;
+      max-height: 400px;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      padding: 8px 16px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .copy-btn:hover {
+      border-color: var(--accent-blue);
+      color: var(--text-primary);
+      background: rgba(88, 166, 255, 0.1);
+    }
+
+    .copy-btn.copied {
+      background: var(--accent-green);
+      border-color: var(--accent-green);
+      color: white;
+    }
+
+    /* Tips section */
+    .tips {
+      background: rgba(57, 197, 207, 0.1);
+      border: 1px solid rgba(57, 197, 207, 0.3);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 24px;
+    }
+
+    .tips-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tips-list {
+      list-style: none;
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.8;
+    }
+
+    .tips-list li {
+      padding-left: 20px;
+      position: relative;
+    }
+
+    .tips-list li::before {
+      content: '>';
+      position: absolute;
+      left: 0;
+      color: var(--accent-cyan);
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .footer a {
+      color: var(--accent-blue);
+      text-decoration: none;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
+    }
+
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 16px 24px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--accent-green);
+      border-radius: 12px;
+      color: var(--text-primary);
+      font-size: 14px;
+      box-shadow: var(--shadow-lg);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .toast-icon {
+      font-size: 20px;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .container {
+        padding: 20px;
+      }
+
+      .card {
+        padding: 24px;
+      }
+
+      .btn-group {
+        flex-direction: column;
+      }
+
+      .btn {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+
+    /* Syntax highlighting */
+    .hl-key { color: var(--accent-purple); }
+    .hl-string { color: var(--accent-green); }
+    .hl-bracket { color: var(--text-secondary); }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <span class="logo-icon">🔗</span>
+        <span class="logo-text">CRAG</span>
+      </div>
+      <p class="header-subtitle">MCP 配置生成器</p>
+      <nav class="nav-links">
+        <a href="/" class="nav-link">📊 调用图</a>
+        <a href="/config.html" class="nav-link active">⚙️ 配置生成</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <h2 class="card-title">
+        <span class="card-title-icon">⚙️</span>
+        配置信息
+      </h2>
+      <p class="card-description">
+        填写以下信息生成 Cursor 或 Claude Desktop 的 MCP 配置文件。所有数据将自动保存到本地浏览器。
+      </p>
+
+      <div class="form-group">
+        <label class="form-label">
+          crag 可执行文件路径
+          <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">📁</span>
+          <input type="text" class="form-input" id="crag-path"
+                 placeholder="/usr/local/bin/crag 或 crag (如果在 PATH 中)">
+        </div>
+        <p class="form-hint">如果 crag 已添加到 PATH，可以直接填写 "crag"</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          数据库文件路径
+          <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">💾</span>
+          <input type="text" class="form-input" id="db-path"
+                 placeholder="/path/to/your/project/.crag.db">
+        </div>
+        <p class="form-hint">必须使用绝对路径。运行 <code>crag analyze . -o .crag.db</code> 生成数据库</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">服务器名称 (可选)</label>
+        <div class="input-wrapper">
+          <span class="input-icon">🏷️</span>
+          <input type="text" class="form-input" id="server-name"
+                 placeholder="crag" value="crag">
+        </div>
+        <p class="form-hint">在 MCP 客户端中显示的名称</p>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="generateConfig()">
+          ✨ 生成配置
+        </button>
+        <button class="btn btn-secondary" onclick="clearForm()">
+          🗑️ 清空
+        </button>
+        <button class="btn btn-secondary" onclick="detectPaths()">
+          🔍 自动检测
+        </button>
+      </div>
+    </div>
+
+    <div class="card" id="output-card" style="display: none;">
+      <h2 class="card-title">
+        <span class="card-title-icon">📄</span>
+        生成的配置
+      </h2>
+
+      <div class="output-tabs">
+        <button class="output-tab active" onclick="switchTab('json')">JSON (Cursor)</button>
+        <button class="output-tab" onclick="switchTab('claude')">Claude Desktop</button>
+      </div>
+
+      <div class="output-content">
+        <button class="copy-btn" onclick="copyOutput()">
+          <span id="copy-icon">📋</span>
+          <span id="copy-text">复制</span>
+        </button>
+        <pre class="output-code" id="output-code"></pre>
+      </div>
+
+      <div class="tips">
+        <div class="tips-title">
+          <span>💡</span> 使用说明
+        </div>
+        <ul class="tips-list" id="tips-list">
+          <li>将配置复制到 <code>.cursor/mcp.json</code> 文件中</li>
+          <li>重启 Cursor 使配置生效</li>
+          <li>AI 将自动获得 crag 的 6 个工具</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">
+        <span class="card-title-icon">🛠️</span>
+        可用工具
+      </h2>
+      <p class="card-description">
+        配置完成后，AI 将可以使用以下工具自动分析代码调用关系：
+      </p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px;">
+        <div class="checkbox-group" style="cursor: default;">
+          <span style="font-size: 24px;">🎯</span>
+          <div>
+            <div class="checkbox-label">impact</div>
+            <div class="checkbox-desc">分析函数修改的影响范围</div>
+          </div>
+        </div>
+        <div class="checkbox-group" style="cursor: default;">
+          <span style="font-size: 24px;">⬆️</span>
+          <div>
+            <div class="checkbox-label">upstream</div>
+            <div class="checkbox-desc">查询谁调用了这个函数</div>
+          </div>
+        </div>
+        <div class="checkbox-group" style="cursor: default;">
+          <span style="font-size: 24px;">⬇️</span>
+          <div>
+            <div class="checkbox-label">downstream</div>
+            <div class="checkbox-desc">查询这个函数调用了什么</div>
+          </div>
+        </div>
+        <div class="checkbox-group" style="cursor: default;">
+          <span style="font-size: 24px;">🔍</span>
+          <div>
+            <div class="checkbox-label">search</div>
+            <div class="checkbox-desc">搜索项目中的函数</div>
+          </div>
+        </div>
+        <div class="checkbox-group" style="cursor: default;">
+          <span style="font-size: 24px;">📋</span>
+          <div>
+            <div class="checkbox-label">list</div>
+            <div class="checkbox-desc">列出项目中的所有函数</div>
+          </div>
+        </div>
+        <div class="checkbox-group" style="cursor: default;">
+          <span style="font-size: 24px;">📊</span>
+          <div>
+            <div class="checkbox-label">mermaid</div>
+            <div class="checkbox-desc">生成 Mermaid 流程图</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <p>CRAG - Code RAG Call Graph Tool</p>
+      <p style="margin-top: 8px;">
+        <a href="https://github.com/zheng/crag" target="_blank">GitHub</a>
+        ·
+        <a href="https://modelcontextprotocol.io/" target="_blank">MCP Protocol</a>
+      </p>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast">
+    <span class="toast-icon">✅</span>
+    <span id="toast-message">已复制到剪贴板</span>
+  </div>
+
+  <script>
+    // Storage keys
+    const STORAGE_KEYS = {
+      cragPath: 'crag_config_crag_path',
+      dbPath: 'crag_config_db_path',
+      serverName: 'crag_config_server_name'
+    };
+
+    // Current tab
+    let currentTab = 'json';
+
+    // Load saved values on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      loadSavedValues();
+    });
+
+    // Auto-save on input change
+    document.querySelectorAll('.form-input').forEach(input => {
+      input.addEventListener('input', saveValues);
+    });
+
+    function loadSavedValues() {
+      const cragPath = localStorage.getItem(STORAGE_KEYS.cragPath);
+      const dbPath = localStorage.getItem(STORAGE_KEYS.dbPath);
+      const serverName = localStorage.getItem(STORAGE_KEYS.serverName);
+
+      if (cragPath) document.getElementById('crag-path').value = cragPath;
+      if (dbPath) document.getElementById('db-path').value = dbPath;
+      if (serverName) document.getElementById('server-name').value = serverName;
+    }
+
+    function saveValues() {
+      localStorage.setItem(STORAGE_KEYS.cragPath, document.getElementById('crag-path').value);
+      localStorage.setItem(STORAGE_KEYS.dbPath, document.getElementById('db-path').value);
+      localStorage.setItem(STORAGE_KEYS.serverName, document.getElementById('server-name').value);
+    }
+
+    function generateConfig() {
+      const cragPath = document.getElementById('crag-path').value.trim();
+      const dbPath = document.getElementById('db-path').value.trim();
+      const serverName = document.getElementById('server-name').value.trim() || 'crag';
+
+      if (!cragPath || !dbPath) {
+        showToast('请填写必填字段', 'error');
+        return;
+      }
+
+      if (!dbPath.startsWith('/')) {
+        showToast('数据库路径必须是绝对路径', 'error');
+        return;
+      }
+
+      saveValues();
+      updateOutput(cragPath, dbPath, serverName);
+      document.getElementById('output-card').style.display = 'block';
+      document.getElementById('output-card').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function updateOutput(cragPath, dbPath, serverName) {
+      const outputCode = document.getElementById('output-code');
+      const tipsList = document.getElementById('tips-list');
+
+      if (currentTab === 'json') {
+        // Cursor format
+        const config = {
+          mcpServers: {
+            [serverName]: {
+              command: cragPath,
+              args: ['mcp', '-d', dbPath]
+            }
+          }
+        };
+        outputCode.innerHTML = syntaxHighlight(JSON.stringify(config, null, 2));
+        tipsList.innerHTML = `
+          <li>将配置复制到项目根目录的 <code>.cursor/mcp.json</code> 文件</li>
+          <li>如果文件不存在，请先创建 <code>.cursor</code> 目录</li>
+          <li>重启 Cursor 使配置生效</li>
+          <li>在对话中尝试：<em>"搜索 Handler 函数"</em> 或 <em>"分析 main 函数的影响"</em></li>
+        `;
+      } else {
+        // Claude Desktop format
+        const config = {
+          mcpServers: {
+            [serverName]: {
+              command: cragPath,
+              args: ['mcp', '-d', dbPath]
+            }
+          }
+        };
+        outputCode.innerHTML = syntaxHighlight(JSON.stringify(config, null, 2));
+        tipsList.innerHTML = `
+          <li>打开 Claude Desktop 设置 → Developer → Edit Config</li>
+          <li>将配置添加到 <code>claude_desktop_config.json</code></li>
+          <li>完全退出并重启 Claude Desktop</li>
+          <li>在对话中可以直接询问代码调用关系</li>
+        `;
+      }
+    }
+
+    function syntaxHighlight(json) {
+      return json
+        .replace(/(".*?"):/g, '<span class="hl-key">$1</span>:')
+        .replace(/: (".*?")/g, ': <span class="hl-string">$1</span>')
+        .replace(/[\[\]{}]/g, '<span class="hl-bracket">$&</span>');
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.output-tab').forEach(t => t.classList.remove('active'));
+      event.target.classList.add('active');
+
+      const cragPath = document.getElementById('crag-path').value.trim();
+      const dbPath = document.getElementById('db-path').value.trim();
+      const serverName = document.getElementById('server-name').value.trim() || 'crag';
+
+      if (cragPath && dbPath) {
+        updateOutput(cragPath, dbPath, serverName);
+      }
+    }
+
+    function copyOutput() {
+      const outputCode = document.getElementById('output-code');
+      const text = outputCode.textContent;
+
+      navigator.clipboard.writeText(text).then(() => {
+        const copyBtn = document.querySelector('.copy-btn');
+        const copyIcon = document.getElementById('copy-icon');
+        const copyText = document.getElementById('copy-text');
+
+        copyBtn.classList.add('copied');
+        copyIcon.textContent = '✓';
+        copyText.textContent = '已复制';
+
+        setTimeout(() => {
+          copyBtn.classList.remove('copied');
+          copyIcon.textContent = '📋';
+          copyText.textContent = '复制';
+        }, 2000);
+
+        showToast('已复制到剪贴板');
+      });
+    }
+
+    function clearForm() {
+      document.getElementById('crag-path').value = '';
+      document.getElementById('db-path').value = '';
+      document.getElementById('server-name').value = 'crag';
+      document.getElementById('output-card').style.display = 'none';
+
+      localStorage.removeItem(STORAGE_KEYS.cragPath);
+      localStorage.removeItem(STORAGE_KEYS.dbPath);
+      localStorage.removeItem(STORAGE_KEYS.serverName);
+
+      showToast('已清空表单');
+    }
+
+    function detectPaths() {
+      // Try to detect current path from URL or suggest defaults
+      const currentPath = window.location.pathname;
+
+      // Suggest common paths
+      const dbPath = document.getElementById('db-path');
+      if (!dbPath.value) {
+        // Use a placeholder suggestion
+        dbPath.placeholder = '示例: ' + window.location.origin.replace(/:\d+$/, '') + '/project/.crag.db';
+      }
+
+      const cragPath = document.getElementById('crag-path');
+      if (!cragPath.value) {
+        cragPath.value = 'crag';
+      }
+
+      showToast('已设置默认值，请修改为实际路径');
+    }
+
+    function showToast(message, type = 'success') {
+      const toast = document.getElementById('toast');
+      const toastMessage = document.getElementById('toast-message');
+      const toastIcon = toast.querySelector('.toast-icon');
+
+      toastMessage.textContent = message;
+      toastIcon.textContent = type === 'error' ? '❌' : '✅';
+      toast.style.borderColor = type === 'error' ? 'var(--accent-red)' : 'var(--accent-green)';
+
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+  </script>
+</body>
+</html>

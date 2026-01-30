@@ -99,3 +99,23 @@ func (g *GitChanges) GetChangedPackagePatterns() []string {
 	return g.ChangedPackages
 }
 
+// GetRemoteTrackingBranch 获取当前分支对应的远程跟踪分支
+// 返回格式如 "origin/main" 或 "origin/feature-branch"
+func GetRemoteTrackingBranch(projectPath string) (string, error) {
+	// 使用 git rev-parse 获取上游分支
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	cmd.Dir = projectPath
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("无法获取远程跟踪分支: %w", err)
+	}
+
+	branch := strings.TrimSpace(string(output))
+	if branch == "" {
+		return "", fmt.Errorf("当前分支没有设置远程跟踪分支")
+	}
+
+	return branch, nil
+}
+

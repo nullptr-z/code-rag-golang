@@ -57,6 +57,7 @@ func analyzeCmd() *cobra.Command {
 	var outputPath string
 	var incremental bool
 	var gitBase string
+	var remote bool
 
 	cmd := &cobra.Command{
 		Use:   "analyze [project-path]",
@@ -75,6 +76,17 @@ func analyzeCmd() *cobra.Command {
 			// Incremental mode: detect changed files
 			var changedPackages []string
 			if incremental {
+				// 如果启用 remote 模式，自动获取远程分支作为 base
+				if remote {
+					remoteBranch, err := analyzer.GetRemoteTrackingBranch(projectPath)
+					if err != nil {
+						fmt.Printf("警告: 无法获取远程分支: %v，将使用默认 HEAD\n", err)
+					} else {
+						gitBase = remoteBranch
+						fmt.Printf("对比远程分支: %s\n", remoteBranch)
+					}
+				}
+
 				fmt.Println("检测 git 变更...")
 				changes, err := analyzer.GetGitChanges(projectPath, gitBase)
 				if err != nil {
@@ -199,6 +211,7 @@ func analyzeCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "输出数据库路径")
 	cmd.Flags().BoolVarP(&incremental, "incremental", "i", false, "增量分析模式 (只分析 git 变更)")
 	cmd.Flags().StringVar(&gitBase, "base", "HEAD", "git 比较基准 (默认 HEAD，即未提交的变更)")
+	cmd.Flags().BoolVarP(&remote, "remote", "r", false, "与远程同分支对比 (origin/<当前分支>)")
 
 	return cmd
 }

@@ -166,18 +166,23 @@ func (s *Server) handleInitialize(req *Request) {
 func (s *Server) handleToolsList(req *Request) {
 	tools := []Tool{
 		{
-			Name:        "impact",
-			Description: "分析函数变更的影响范围，返回调用该函数的上游函数和被该函数调用的下游函数",
+			Name: "impact",
+			Description: `【重要】分析函数修改的影响范围。当用户要修改某个函数时，必须先调用此工具！
+返回：
+- 直接调用者：调用该函数的地方，修改参数/返回值时必须同步修改
+- 间接调用者：可能受影响的上游函数
+- 下游依赖：该函数调用的其他函数
+使用场景：修改函数签名、重构函数、删除函数前`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"function": {
 						Type:        "string",
-						Description: "要分析的函数名称（支持模糊匹配）",
+						Description: "函数名，支持短名称如 'HandleRequest' 或完整名 'pkg/service.HandleRequest'",
 					},
 					"limit": {
 						Type:        "number",
-						Description: "每个分类（直接调用者、间接调用者等）最多返回的函数数量，默认 50",
+						Description: "每个分类最多返回数量，默认 50",
 						Default:     50,
 					},
 				},
@@ -185,22 +190,26 @@ func (s *Server) handleToolsList(req *Request) {
 			},
 		},
 		{
-			Name:        "upstream",
-			Description: "查询调用指定函数的所有上游函数",
+			Name: "upstream",
+			Description: `查询谁调用了这个函数（调用链向上追溯）。
+使用场景：
+- "这个函数在哪里被调用？"
+- "修改这个函数会影响哪些地方？"
+- 理解函数的使用方式和入口点`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"function": {
 						Type:        "string",
-						Description: "要查询的函数名称",
+						Description: "函数名，支持短名称如 'Query' 或 'db.Query'",
 					},
 					"depth": {
 						Type:        "number",
-						Description: "递归查询深度，0表示无限",
+						Description: "递归深度，0=无限，建议用2-3层",
 					},
 					"limit": {
 						Type:        "number",
-						Description: "最多返回的函数数量，默认 50",
+						Description: "最多返回数量，默认 50",
 						Default:     50,
 					},
 				},
@@ -208,22 +217,26 @@ func (s *Server) handleToolsList(req *Request) {
 			},
 		},
 		{
-			Name:        "downstream",
-			Description: "查询指定函数调用的所有下游函数",
+			Name: "downstream",
+			Description: `查询这个函数调用了什么（调用链向下追溯）。
+使用场景：
+- "这个函数内部调用了什么？"
+- "这个函数的依赖是什么？"
+- 理解函数的实现细节和依赖关系`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"function": {
 						Type:        "string",
-						Description: "要查询的函数名称",
+						Description: "函数名，支持短名称",
 					},
 					"depth": {
 						Type:        "number",
-						Description: "递归查询深度，0表示无限",
+						Description: "递归深度，0=无限，建议用2-3层",
 					},
 					"limit": {
 						Type:        "number",
-						Description: "最多返回的函数数量，默认 50",
+						Description: "最多返回数量，默认 50",
 						Default:     50,
 					},
 				},
@@ -231,18 +244,23 @@ func (s *Server) handleToolsList(req *Request) {
 			},
 		},
 		{
-			Name:        "search",
-			Description: "搜索函数，支持模糊匹配",
+			Name: "search",
+			Description: `搜索项目中的函数。支持模糊匹配，短名称优先。
+使用场景：
+- 不确定函数完整名称时
+- 查找包含某关键字的所有函数
+- 探索项目结构
+示例：搜索 'Handler' 会找到所有包含 Handler 的函数`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"pattern": {
 						Type:        "string",
-						Description: "搜索模式（函数名的一部分）",
+						Description: "搜索关键字，如 'Handler'、'Query'、'Process'",
 					},
 					"limit": {
 						Type:        "number",
-						Description: "最多返回的函数数量，默认 50",
+						Description: "最多返回数量，默认 50",
 						Default:     50,
 					},
 				},
@@ -250,41 +268,49 @@ func (s *Server) handleToolsList(req *Request) {
 			},
 		},
 		{
-			Name:        "list",
-			Description: "列出项目中的所有函数",
+			Name: "list",
+			Description: `列出项目中的所有函数。用于了解项目整体结构。
+使用场景：
+- 初次了解项目时
+- 查看项目有哪些主要函数
+- 配合 offset 分页浏览`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"limit": {
 						Type:        "number",
-						Description: "最多返回的函数数量，默认 50",
+						Description: "返回数量，默认 50",
 						Default:     50,
 					},
 					"offset": {
 						Type:        "number",
-						Description: "跳过前N个函数，用于分页，默认 0",
+						Description: "跳过前N个，用于分页",
 						Default:     0,
 					},
 				},
 			},
 		},
 		{
-			Name:        "mermaid",
-			Description: "生成函数调用关系的 Mermaid 流程图，可视化函数的上下游调用链",
+			Name: "mermaid",
+			Description: `生成函数调用关系的 Mermaid 流程图。
+使用场景：
+- 用户想要可视化理解调用关系
+- 生成文档或报告时
+- 解释复杂的调用链`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"function": {
 						Type:        "string",
-						Description: "要分析的函数名称（支持模糊匹配）",
+						Description: "中心函数名",
 					},
 					"direction": {
 						Type:        "string",
-						Description: "方向：upstream（上游）、downstream（下游）、both（双向）",
+						Description: "upstream=上游调用者, downstream=下游被调用, both=双向（默认）",
 					},
 					"depth": {
 						Type:        "number",
-						Description: "递归深度，默认2",
+						Description: "展开深度，默认2",
 					},
 				},
 				Required: []string{"function"},
@@ -468,7 +494,7 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", funcName), true
+		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
 	}
 
 	node := nodes[0]
@@ -522,7 +548,7 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", funcName), true
+		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
 	}
 
 	node := nodes[0]
@@ -571,7 +597,7 @@ func (s *Server) toolSearch(args map[string]interface{}) (string, bool) {
 	}
 
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到匹配 '%s' 的函数\n\n💡 提示：如果代码最近有更新，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", pattern), false
+		return fmt.Sprintf("未找到匹配 '%s' 的函数\n\n💡 提示：如果代码最近有更新，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", pattern), false
 	}
 
 	total := len(nodes)
@@ -668,7 +694,7 @@ func (s *Server) toolMermaid(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i\n```", funcName), true
+		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
 	}
 
 	node := nodes[0]

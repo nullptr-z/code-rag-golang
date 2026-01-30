@@ -126,6 +126,7 @@ crag analyze [project-path] [flags]
 Flags:
   -o, --output string   Output database file path
   -i, --incremental     Incremental analysis mode (only analyze when git changes exist)
+  -r, --remote          Compare with remote tracking branch (origin/<current-branch>)
       --base string     Git comparison base branch (default "HEAD")
 ```
 
@@ -134,6 +135,9 @@ Flags:
 ```bash
 # Detect uncommitted changes, skip analysis if no changes
 crag analyze . -i
+
+# Compare with remote branch (local commits + uncommitted changes)
+crag analyze . -i -r
 
 # Compare with last commit
 crag analyze . -i --base HEAD~1

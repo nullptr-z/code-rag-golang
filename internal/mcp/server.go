@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/zheng/crag/internal/graph"
 	"github.com/zheng/crag/internal/impact"
 	"github.com/zheng/crag/internal/storage"
 )
@@ -172,7 +174,9 @@ func (s *Server) handleToolsList(req *Request) {
 - 直接调用者：调用该函数的地方，修改参数/返回值时必须同步修改
 - 间接调用者：可能受影响的上游函数
 - 下游依赖：该函数调用的其他函数
-使用场景：修改函数签名、重构函数、删除函数前`,
+使用场景：修改函数签名、重构函数、删除函数前
+
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请根据上下文选择正确的函数，使用候选列表中的完整函数名重新调用此工具。`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -195,7 +199,9 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - "这个函数在哪里被调用？"
 - "修改这个函数会影响哪些地方？"
-- 理解函数的使用方式和入口点`,
+- 理解函数的使用方式和入口点
+
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -222,7 +228,9 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - "这个函数内部调用了什么？"
 - "这个函数的依赖是什么？"
-- 理解函数的实现细节和依赖关系`,
+- 理解函数的实现细节和依赖关系
+
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -296,7 +304,9 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - 用户想要可视化理解调用关系
 - 生成文档或报告时
-- 解释复杂的调用链`,
+- 解释复杂的调用链
+
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -350,7 +360,9 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - 修改函数前评估风险
 - 了解哪些函数是"热点"代码
-- 重构时确定优先级`,
+- 重构时确定优先级
+
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -409,6 +421,27 @@ func (s *Server) handleToolsCall(req *Request) {
 	})
 }
 
+// qualifiedShortName returns pkg.FuncName format, preserving enough context for disambiguation.
+// e.g., "github.com/foo/bar/livepkseason.AddUserRankScore" -> "livepkseason.AddUserRankScore"
+func qualifiedShortName(fullName string) string {
+	name := fullName
+	if idx := lastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	return name
+}
+
+// formatAmbiguousResult returns a formatted message listing candidate functions
+// when a function name matches multiple results, asking the AI to retry with a full name.
+func (s *Server) formatAmbiguousResult(funcName string, nodes []*graph.Node) string {
+	result := fmt.Sprintf("函数名 '%s' 匹配到 %d 个结果，请使用完整函数名重新调用：\n\n", funcName, len(nodes))
+	for i, n := range nodes {
+		result += fmt.Sprintf("  [%d] %s\n      %s:%d\n", i+1, qualifiedShortName(n.Name), n.File, n.Line)
+	}
+	result += "\n请使用上述完整函数名（如第一列所示）重新调用此工具。"
+	return result
+}
+
 func (s *Server) toolImpact(args map[string]interface{}) (string, bool) {
 	funcName, ok := args["function"].(string)
 	if !ok || funcName == "" {
@@ -423,6 +456,12 @@ func (s *Server) toolImpact(args map[string]interface{}) (string, bool) {
 	analyzer := impact.NewAnalyzer(s.db)
 	report, err := analyzer.AnalyzeImpact(funcName, 3, 2)
 	if err != nil {
+		if strings.Contains(err.Error(), "ambiguous function name") {
+			nodes, _ := s.db.FindNodesByPattern(funcName)
+			if len(nodes) > 1 {
+				return s.formatAmbiguousResult(funcName, nodes), false
+			}
+		}
 		return fmt.Sprintf("错误：%v", err), true
 	}
 
@@ -550,6 +589,9 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 	if len(nodes) == 0 {
 		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
 	}
+	if len(nodes) > 1 {
+		return s.formatAmbiguousResult(funcName, nodes), false
+	}
 
 	node := nodes[0]
 	callers, err := s.db.GetUpstreamCallers(node.ID, depth)
@@ -603,6 +645,9 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 	}
 	if len(nodes) == 0 {
 		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
+	}
+	if len(nodes) > 1 {
+		return s.formatAmbiguousResult(funcName, nodes), false
 	}
 
 	node := nodes[0]
@@ -868,6 +913,9 @@ func (s *Server) toolRisk(args map[string]interface{}) (string, bool) {
 	if len(nodes) == 0 {
 		return fmt.Sprintf("未找到函数: %s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
 	}
+	if len(nodes) > 1 {
+		return s.formatAmbiguousResult(funcName, nodes), false
+	}
 
 	node := nodes[0]
 	risk, err := s.db.GetRiskScore(node.ID)
@@ -940,6 +988,9 @@ func (s *Server) toolMermaid(args map[string]interface{}) (string, bool) {
 	}
 	if len(nodes) == 0 {
 		return fmt.Sprintf("未找到函数：%s\n\n💡 提示：如果这是新添加的函数，请运行以下命令更新数据库：\n```bash\ncrag analyze -i -r\n```", funcName), true
+	}
+	if len(nodes) > 1 {
+		return s.formatAmbiguousResult(funcName, nodes), false
 	}
 
 	node := nodes[0]

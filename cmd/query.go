@@ -12,6 +12,7 @@ import (
 func upstreamCmd() *cobra.Command {
 	var depth int
 	var format string
+	var selectN int
 
 	cmd := &cobra.Command{
 		Use:   "upstream <function-name>",
@@ -32,21 +33,29 @@ func upstreamCmd() *cobra.Command {
 				if strings.Contains(err.Error(), "ambiguous function name") {
 					nodes, _ := db.FindNodesByPattern(funcName)
 					if len(nodes) > 1 {
-						fmt.Println("找到多个匹配的函数，请选择:")
-						for i, n := range nodes {
-							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
-						}
-						fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
+						if selectN >= 1 && selectN <= len(nodes) {
+							selectedNode := nodes[selectN-1]
+							report, err = a.AnalyzeImpact(selectedNode.Name, depth, 1)
+							if err != nil {
+								return err
+							}
+						} else {
+							fmt.Println("找到多个匹配的函数，请选择:")
+							for i, n := range nodes {
+								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
+							}
+							fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
-						var choice int
-						if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(nodes) {
-							return fmt.Errorf("无效的选择")
-						}
+							var choice int
+							if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(nodes) {
+								return fmt.Errorf("无效的选择")
+							}
 
-						selectedNode := nodes[choice-1]
-						report, err = a.AnalyzeImpact(selectedNode.Name, depth, 1)
-						if err != nil {
-							return err
+							selectedNode := nodes[choice-1]
+							report, err = a.AnalyzeImpact(selectedNode.Name, depth, 1)
+							if err != nil {
+								return err
+							}
 						}
 					} else {
 						return err
@@ -102,6 +111,7 @@ func upstreamCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&depth, "depth", 7, "递归深度 (0=无限)")
 	cmd.Flags().StringVar(&format, "format", "text", "输出格式 (text/json/markdown)")
+	cmd.Flags().IntVar(&selectN, "select", 0, "当匹配到多个函数时，直接选择第N个（跳过交互提示）")
 
 	return cmd
 }
@@ -109,6 +119,7 @@ func upstreamCmd() *cobra.Command {
 func downstreamCmd() *cobra.Command {
 	var depth int
 	var format string
+	var selectN int
 
 	cmd := &cobra.Command{
 		Use:   "downstream <function-name>",
@@ -129,21 +140,29 @@ func downstreamCmd() *cobra.Command {
 				if strings.Contains(err.Error(), "ambiguous function name") {
 					nodes, _ := db.FindNodesByPattern(funcName)
 					if len(nodes) > 1 {
-						fmt.Println("找到多个匹配的函数，请选择:")
-						for i, n := range nodes {
-							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
-						}
-						fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
+						if selectN >= 1 && selectN <= len(nodes) {
+							selectedNode := nodes[selectN-1]
+							report, err = a.AnalyzeImpact(selectedNode.Name, 1, depth)
+							if err != nil {
+								return err
+							}
+						} else {
+							fmt.Println("找到多个匹配的函数，请选择:")
+							for i, n := range nodes {
+								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
+							}
+							fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
-						var choice int
-						if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(nodes) {
-							return fmt.Errorf("无效的选择")
-						}
+							var choice int
+							if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(nodes) {
+								return fmt.Errorf("无效的选择")
+							}
 
-						selectedNode := nodes[choice-1]
-						report, err = a.AnalyzeImpact(selectedNode.Name, 1, depth)
-						if err != nil {
-							return err
+							selectedNode := nodes[choice-1]
+							report, err = a.AnalyzeImpact(selectedNode.Name, 1, depth)
+							if err != nil {
+								return err
+							}
 						}
 					} else {
 						return err
@@ -199,6 +218,7 @@ func downstreamCmd() *cobra.Command {
 
 	cmd.Flags().IntVar(&depth, "depth", 7, "递归深度 (0=无限)")
 	cmd.Flags().StringVar(&format, "format", "text", "输出格式 (text/json/markdown)")
+	cmd.Flags().IntVar(&selectN, "select", 0, "当匹配到多个函数时，直接选择第N个（跳过交互提示）")
 
 	return cmd
 }
@@ -207,6 +227,7 @@ func impactCmd() *cobra.Command {
 	var upstreamDepth int
 	var downstreamDepth int
 	var format string
+	var selectN int
 
 	cmd := &cobra.Command{
 		Use:   "impact <function-name>",
@@ -227,21 +248,29 @@ func impactCmd() *cobra.Command {
 				if strings.Contains(err.Error(), "ambiguous function name") {
 					nodes, _ := db.FindNodesByPattern(funcName)
 					if len(nodes) > 1 {
-						fmt.Println("找到多个匹配的函数，请选择:")
-						for i, n := range nodes {
-							fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
-						}
-						fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
+						if selectN >= 1 && selectN <= len(nodes) {
+							selectedNode := nodes[selectN-1]
+							report, err = a.AnalyzeImpact(selectedNode.Name, upstreamDepth, downstreamDepth)
+							if err != nil {
+								return err
+							}
+						} else {
+							fmt.Println("找到多个匹配的函数，请选择:")
+							for i, n := range nodes {
+								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
+							}
+							fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
-						var choice int
-						if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(nodes) {
-							return fmt.Errorf("无效的选择")
-						}
+							var choice int
+							if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(nodes) {
+								return fmt.Errorf("无效的选择")
+							}
 
-						selectedNode := nodes[choice-1]
-						report, err = a.AnalyzeImpact(selectedNode.Name, upstreamDepth, downstreamDepth)
-						if err != nil {
-							return err
+							selectedNode := nodes[choice-1]
+							report, err = a.AnalyzeImpact(selectedNode.Name, upstreamDepth, downstreamDepth)
+							if err != nil {
+								return err
+							}
 						}
 					} else {
 						return err
@@ -309,6 +338,7 @@ func impactCmd() *cobra.Command {
 	cmd.Flags().IntVar(&upstreamDepth, "upstream-depth", 7, "上游递归深度")
 	cmd.Flags().IntVar(&downstreamDepth, "downstream-depth", 7, "下游递归深度")
 	cmd.Flags().StringVar(&format, "format", "text", "输出格式 (text/json/markdown)")
+	cmd.Flags().IntVar(&selectN, "select", 0, "当匹配到多个函数时，直接选择第N个（跳过交互提示）")
 
 	return cmd
 }

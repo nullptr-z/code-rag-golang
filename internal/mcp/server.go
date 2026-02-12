@@ -92,8 +92,8 @@ type InputSchema struct {
 }
 
 type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
+	Type        string      `json:"type"`
+	Description string      `json:"description"`
 	Default     interface{} `json:"default,omitempty"`
 }
 
@@ -176,7 +176,9 @@ func (s *Server) handleToolsList(req *Request) {
 - 下游依赖：该函数调用的其他函数
 使用场景：修改函数签名、重构函数、删除函数前
 
-⚠️ 如果函数名匹配到多个结果，会返回候选列表，请根据上下文选择正确的函数，使用候选列表中的完整函数名重新调用此工具。`,
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请根据上下文选择正确的函数，使用候选列表中的完整函数名重新调用此工具。
+
+📌 索引维护：当你完成代码修改（新增/修改/删除了代码文件）后，必须在后台运行 crag analyze -i -r 更新索引，否则后续查询结果可能不准确。如果改完代码后需要立即查询，则应前台阻塞运行确保索引就绪。`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{

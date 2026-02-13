@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/zheng/crag/internal/display"
 	"github.com/zheng/crag/internal/graph"
 	"github.com/zheng/crag/internal/impact"
 	"github.com/zheng/crag/internal/storage"
@@ -552,7 +553,7 @@ func (s *Server) buildSummary() (string, error) {
 		sb.WriteString("| 风险 | 函数 | 直接调用者 |\n")
 		sb.WriteString("|------|------|------------|\n")
 		for _, r := range risks {
-			sb.WriteString(fmt.Sprintf("| %s %s | %s | %d |\n", getRiskIcon(r.RiskLevel), r.RiskLevel, shortName(r.Node.Name), r.DirectCallers))
+			sb.WriteString(fmt.Sprintf("| %s %s | %s | %d |\n", getRiskIcon(r.RiskLevel), r.RiskLevel, display.ShortFuncName(r.Node.Name), r.DirectCallers))
 		}
 		sb.WriteString("\n")
 	}
@@ -569,22 +570,13 @@ func shortPkgName(pkg string) string {
 	return strings.Join(parts[len(parts)-2:], "/")
 }
 
-// qualifiedShortName returns pkg.FuncName format, preserving enough context for disambiguation.
-// e.g., "github.com/foo/bar/livepkseason.AddUserRankScore" -> "livepkseason.AddUserRankScore"
-func qualifiedShortName(fullName string) string {
-	name := fullName
-	if idx := lastIndex(name, "/"); idx >= 0 {
-		name = name[idx+1:]
-	}
-	return name
-}
 
 // formatAmbiguousResult returns a formatted message listing candidate functions
 // when a function name matches multiple results, asking the AI to retry with a full name.
 func (s *Server) formatAmbiguousResult(funcName string, nodes []*graph.Node) string {
 	result := fmt.Sprintf("函数名 '%s' 匹配到 %d 个结果，请使用完整函数名重新调用：\n\n", funcName, len(nodes))
 	for i, n := range nodes {
-		result += fmt.Sprintf("  [%d] %s\n      %s:%d\n", i+1, qualifiedShortName(n.Name), n.File, n.Line)
+		result += fmt.Sprintf("  [%d] %s\n      %s:%d\n", i+1, n.Name, n.File, n.Line)
 	}
 	result += "\n请使用上述完整函数名（如第一列所示）重新调用此工具。"
 	return result
@@ -596,13 +588,11 @@ func (s *Server) toolImpact(args map[string]interface{}) (string, bool) {
 		return "错误：需要提供函数名称", true
 	}
 
-	limit := 50
-	if l, ok := args["limit"].(float64); ok && l > 0 {
-		limit = int(l)
-	}
+	upstreamDepth := 7
+	downstreamDepth := 7
 
 	analyzer := impact.NewAnalyzer(s.db)
-	report, err := analyzer.AnalyzeImpact(funcName, 3, 2)
+	report, err := analyzer.AnalyzeImpact(funcName, upstreamDepth, downstreamDepth)
 	if err != nil {
 		if strings.Contains(err.Error(), "ambiguous function name") {
 			nodes, _ := s.db.FindNodesByPattern(funcName)
@@ -613,152 +603,78 @@ func (s *Server) toolImpact(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 
-	return s.formatImpactWithDepth(report, limit), false
+	return s.formatImpactAsTree(report, upstreamDepth, downstreamDepth), false
 }
 
-func (s *Server) formatImpactWithDepth(report *impact.ImpactReport, limit int) string {
+func (s *Server) formatImpactAsTree(report *impact.ImpactReport, upstreamDepth, downstreamDepth int) string {
 	var result string
 
-	result += fmt.Sprintf("## 变更影响分析: %s\n\n", report.Target.Name)
-	result += fmt.Sprintf("**位置:** %s:%d\n\n", report.Target.File, report.Target.Line)
-
-	if report.Target.Signature != "" {
-		result += fmt.Sprintf("**签名:** `%s`\n\n", report.Target.Signature)
-	}
-
-	if report.Target.Doc != "" {
-		result += fmt.Sprintf("**文档:** %s\n\n", report.Target.Doc)
-	}
-
-	// For var/const, direct callers are referencing functions (no depth hierarchy)
+	// For var/const, show referencing functions as flat list (same as CLI)
 	isVarConst := report.Target.Kind == graph.NodeKindVar || report.Target.Kind == graph.NodeKindConst
 
 	if isVarConst {
-		// var/const: show referencing functions without depth
-		result += "### 引用此变量/常量的函数\n\n"
-		if len(report.DirectCallers) == 0 {
-			result += "_无引用_\n\n"
+		kindLabel := "变量"
+		if report.Target.Kind == graph.NodeKindConst {
+			kindLabel = "常量"
+		}
+		result += fmt.Sprintf("📍 当前%s\n", kindLabel)
+		result += fmt.Sprintf("%s  %s:%d\n", display.ShortFuncName(report.Target.Name), report.Target.File, report.Target.Line)
+		if report.Target.Signature != "" {
+			result += fmt.Sprintf("   类型: %s\n", report.Target.Signature)
+		}
+		result += "\n"
+
+		if len(report.DirectCallers) > 0 {
+			result += fmt.Sprintf("⬆️ 引用此%s的函数 (共 %d 个)\n", kindLabel, len(report.DirectCallers))
+			for i, c := range report.DirectCallers {
+				prefix := "├──"
+				if i == len(report.DirectCallers)-1 {
+					prefix = "└──"
+				}
+				result += fmt.Sprintf("%s %s  %s:%d\n", prefix, display.ShortFuncName(c.Name), c.File, c.Line)
+			}
 		} else {
-			total := len(report.DirectCallers)
-			callers := report.DirectCallers
-			if len(callers) > limit {
-				callers = callers[:limit]
-			}
-			result += "| 函数 | 文件 | 行号 |\n"
-			result += "|------|------|------|\n"
-			for _, c := range callers {
-				result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
-			}
-			if total > limit {
-				result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
-			}
-			result += "\n"
+			result += fmt.Sprintf("⬆️ 引用此%s的函数\n", kindLabel)
+			result += "└── (无)\n"
 		}
 		return result
 	}
 
-	// For functions: query with depth info
-	allCallers, _ := s.db.GetUpstreamCallersWithDepth(report.Target.ID, 3)
-	allCallees, _ := s.db.GetDownstreamCalleesWithDepth(report.Target.ID, 2)
+	// For functions: build upstream and downstream trees
+	upstreamTree, _ := s.db.GetUpstreamCallTree(report.Target.ID, upstreamDepth)
+	downstreamTree, _ := s.db.GetDownstreamCallTree(report.Target.ID, downstreamDepth)
 
-	// Split callers into direct (depth=1) and indirect (depth>1)
-	var directCallers, indirectCallers []*storage.NodeWithDepth
-	for _, c := range allCallers {
-		if c.Depth == 1 {
-			directCallers = append(directCallers, c)
-		} else {
-			indirectCallers = append(indirectCallers, c)
-		}
+	maxWidth := len(display.ShortFuncName(report.Target.Name))
+	upstreamMaxDepth := 0
+	downstreamMaxDepth := 0
+	display.CalcTreeMaxWidth(upstreamTree, &maxWidth, 0, &upstreamMaxDepth)
+	display.CalcTreeMaxWidth(downstreamTree, &maxWidth, 0, &downstreamMaxDepth)
+
+	result += "📍 当前函数\n"
+	targetMaxDepth := upstreamMaxDepth
+	if downstreamMaxDepth > targetMaxDepth {
+		targetMaxDepth = downstreamMaxDepth
 	}
-
-	// Split callees into direct (depth=1) and indirect (depth>1)
-	var directCallees, indirectCallees []*storage.NodeWithDepth
-	for _, c := range allCallees {
-		if c.Depth == 1 {
-			directCallees = append(directCallees, c)
-		} else {
-			indirectCallees = append(indirectCallees, c)
-		}
+	targetPadding := maxWidth + targetMaxDepth*4
+	result += fmt.Sprintf("%-*s  %s:%d\n", targetPadding, display.ShortFuncName(report.Target.Name), report.Target.File, report.Target.Line)
+	if report.Target.Signature != "" {
+		result += fmt.Sprintf("   %s\n", display.ShortSignature(report.Target.Signature))
 	}
+	result += "\n"
 
-	// Direct callers
-	result += "### 直接调用者 (需检查是否需要同步修改)\n\n"
-	if len(directCallers) == 0 {
-		result += "_无直接调用者_\n\n"
+	if len(upstreamTree) > 0 {
+		result += fmt.Sprintf("⬆️ 调用者 (深度 %d)\n", upstreamDepth)
+		result += display.FormatCallTree(upstreamTree, "", maxWidth, upstreamMaxDepth, 0)
 	} else {
-		total := len(directCallers)
-		items := directCallers
-		if len(items) > limit {
-			items = items[:limit]
-		}
-		result += "| 函数 | 文件 | 行号 |\n"
-		result += "|------|------|------|\n"
-		for _, c := range items {
-			result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
-		}
-		if total > limit {
-			result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
-		}
-		result += "\n"
+		result += "⬆️ 调用者\n└── (无)\n"
 	}
+	result += "\n"
 
-	// Indirect callers with depth
-	if len(indirectCallers) > 0 {
-		result += "### 间接调用者 (可能受影响)\n\n"
-		total := len(indirectCallers)
-		items := indirectCallers
-		if len(items) > limit {
-			items = items[:limit]
-		}
-		result += "| 深度 | 函数 | 文件 | 行号 |\n"
-		result += "|------|------|------|------|\n"
-		for _, c := range items {
-			result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
-		}
-		if total > limit {
-			result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
-		}
-		result += "\n"
-	}
-
-	// Direct callees
-	result += "### 下游依赖 (本函数调用的)\n\n"
-	if len(directCallees) == 0 {
-		result += "_无下游依赖_\n\n"
+	if len(downstreamTree) > 0 {
+		result += fmt.Sprintf("⬇️ 被调用 (深度 %d)\n", downstreamDepth)
+		result += display.FormatCallTree(downstreamTree, "", maxWidth, downstreamMaxDepth, 0)
 	} else {
-		total := len(directCallees)
-		items := directCallees
-		if len(items) > limit {
-			items = items[:limit]
-		}
-		result += "| 函数 | 文件 | 行号 |\n"
-		result += "|------|------|------|\n"
-		for _, c := range items {
-			result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
-		}
-		if total > limit {
-			result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
-		}
-		result += "\n"
-	}
-
-	// Indirect callees with depth
-	if len(indirectCallees) > 0 {
-		result += "### 间接下游依赖\n\n"
-		total := len(indirectCallees)
-		items := indirectCallees
-		if len(items) > limit {
-			items = items[:limit]
-		}
-		result += "| 深度 | 函数 | 文件 | 行号 |\n"
-		result += "|------|------|------|------|\n"
-		for _, c := range items {
-			result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
-		}
-		if total > limit {
-			result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
-		}
-		result += "\n"
+		result += "⬇️ 被调用\n└── (无)\n"
 	}
 
 	return result
@@ -775,11 +691,6 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 		depth = int(d)
 	}
 
-	limit := 50
-	if l, ok := args["limit"].(float64); ok && l > 0 {
-		limit = int(l)
-	}
-
 	// Find the function
 	nodes, err := s.db.FindNodesByPattern(funcName)
 	if err != nil {
@@ -793,29 +704,24 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 	}
 
 	node := nodes[0]
-	callers, err := s.db.GetUpstreamCallersWithDepth(node.ID, depth)
+	callTree, err := s.db.GetUpstreamCallTree(node.ID, depth)
 	if err != nil {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 
-	if len(callers) == 0 {
-		return fmt.Sprintf("函数 %s 没有上游调用者", funcName), false
-	}
+	maxWidth := len(display.ShortFuncName(node.Name))
+	maxDepth := 0
+	display.CalcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
 
-	total := len(callers)
-	if len(callers) > limit {
-		callers = callers[:limit]
-	}
+	targetPadding := maxWidth + maxDepth*4
+	result := "📍 当前函数\n"
+	result += fmt.Sprintf("%-*s  %s:%d\n\n", targetPadding, display.ShortFuncName(node.Name), node.File, node.Line)
 
-	result := fmt.Sprintf("## %s 的上游调用者\n\n", funcName)
-	result += "| 深度 | 函数 | 文件 | 行号 |\n"
-	result += "|------|------|------|------|\n"
-	for _, c := range callers {
-		result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
-	}
-
-	if total > limit {
-		result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
+	if len(callTree) > 0 {
+		result += fmt.Sprintf("⬆️ 调用者 (深度 %d)\n", depth)
+		result += display.FormatCallTree(callTree, "", maxWidth, maxDepth, 0)
+	} else {
+		result += "⬆️ 调用者\n└── (无)\n"
 	}
 
 	return result, false
@@ -832,11 +738,6 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 		depth = int(d)
 	}
 
-	limit := 50
-	if l, ok := args["limit"].(float64); ok && l > 0 {
-		limit = int(l)
-	}
-
 	// Find the function
 	nodes, err := s.db.FindNodesByPattern(funcName)
 	if err != nil {
@@ -850,29 +751,24 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 	}
 
 	node := nodes[0]
-	callees, err := s.db.GetDownstreamCalleesWithDepth(node.ID, depth)
+	callTree, err := s.db.GetDownstreamCallTree(node.ID, depth)
 	if err != nil {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 
-	if len(callees) == 0 {
-		return fmt.Sprintf("函数 %s 没有下游调用", funcName), false
-	}
+	maxWidth := len(display.ShortFuncName(node.Name))
+	maxDepth := 0
+	display.CalcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
 
-	total := len(callees)
-	if len(callees) > limit {
-		callees = callees[:limit]
-	}
+	targetPadding := maxWidth + maxDepth*4
+	result := "📍 当前函数\n"
+	result += fmt.Sprintf("%-*s  %s:%d\n\n", targetPadding, display.ShortFuncName(node.Name), node.File, node.Line)
 
-	result := fmt.Sprintf("## %s 的下游调用\n\n", funcName)
-	result += "| 深度 | 函数 | 文件 | 行号 |\n"
-	result += "|------|------|------|------|\n"
-	for _, c := range callees {
-		result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
-	}
-
-	if total > limit {
-		result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
+	if len(callTree) > 0 {
+		result += fmt.Sprintf("⬇️ 被调用 (深度 %d)\n", depth)
+		result += display.FormatCallTree(callTree, "", maxWidth, maxDepth, 0)
+	} else {
+		result += "⬇️ 被调用\n└── (无)\n"
 	}
 
 	return result, false
@@ -903,16 +799,14 @@ func (s *Server) toolSearch(args map[string]interface{}) (string, bool) {
 		nodes = nodes[:limit]
 	}
 
-	result := fmt.Sprintf("## 搜索结果：%s\n\n找到 %d 个匹配", pattern, total)
+	result := fmt.Sprintf("找到 %d 个匹配", total)
 	if total > limit {
 		result += fmt.Sprintf("（显示前 %d 个）", limit)
 	}
-	result += "\n\n"
+	result += ":\n\n"
 
-	result += "| 类型 | 函数 | 文件 | 行号 |\n"
-	result += "|------|------|------|------|\n"
 	for _, n := range nodes {
-		result += fmt.Sprintf("| %s | %s | %s | %d |\n", n.Kind, n.Name, n.File, n.Line)
+		result += fmt.Sprintf("  [%s] %s\n    %s:%d\n", n.Kind, display.ShortFuncName(n.Name), n.File, n.Line)
 	}
 
 	return result, false
@@ -981,16 +875,14 @@ func (s *Server) toolList(args map[string]interface{}) (string, bool) {
 		displayed = limit
 	}
 
-	result := fmt.Sprintf("## %s列表\n\n共 %d 个%s", kindLabel, total, kindLabel)
+	result := fmt.Sprintf("共 %d 个%s", total, kindLabel)
 	if offset > 0 || displayed < total-offset {
 		result += fmt.Sprintf("（显示 %d-%d）", offset+1, offset+displayed)
 	}
-	result += "\n\n"
+	result += ":\n\n"
 
-	result += "| 名称 | 文件 | 行号 |\n"
-	result += "|------|------|------|\n"
 	for _, n := range nodes {
-		result += fmt.Sprintf("| %s | %s | %d |\n", n.Name, n.File, n.Line)
+		result += fmt.Sprintf("  %s\n    %s:%d\n", display.ShortFuncName(n.Name), n.File, n.Line)
 	}
 
 	return result, false
@@ -1015,11 +907,11 @@ func (s *Server) toolImplements(args map[string]interface{}) (string, bool) {
 
 		result := fmt.Sprintf("## 项目接口列表 (共 %d 个)\n\n", len(interfaces))
 		for _, iface := range interfaces {
-			methods := shortSignature(iface.Signature)
+			methods := display.ShortSignature(iface.Signature)
 			if methods == "" {
 				methods = "(空接口)"
 			}
-			result += fmt.Sprintf("**%s**\n", shortName(iface.Name))
+			result += fmt.Sprintf("**%s**\n", display.ShortFuncName(iface.Name))
 			result += fmt.Sprintf("- 方法: %s\n", methods)
 			result += fmt.Sprintf("- 位置: %s:%d\n\n", iface.File, iface.Line)
 		}
@@ -1040,10 +932,10 @@ func (s *Server) toolImplements(args map[string]interface{}) (string, bool) {
 	if len(interfaces) > 0 {
 		// Found interface(s), show implementations
 		iface := interfaces[0]
-		result := fmt.Sprintf("## 接口: %s\n\n", shortName(iface.Name))
+		result := fmt.Sprintf("## 接口: %s\n\n", display.ShortFuncName(iface.Name))
 		result += fmt.Sprintf("- 位置: %s:%d\n", iface.File, iface.Line)
 		if iface.Signature != "" {
-			result += fmt.Sprintf("- 方法: %s\n", shortSignature(iface.Signature))
+			result += fmt.Sprintf("- 方法: %s\n", display.ShortSignature(iface.Signature))
 		}
 		result += "\n"
 
@@ -1058,7 +950,7 @@ func (s *Server) toolImplements(args map[string]interface{}) (string, bool) {
 			result += fmt.Sprintf("### 实现类型 (共 %d 个)\n\n", len(impls))
 			for _, impl := range impls {
 				result += fmt.Sprintf("- **%s** - %s:%d\n",
-					shortName(impl.Name), impl.File, impl.Line)
+					display.ShortFuncName(impl.Name), impl.File, impl.Line)
 			}
 		}
 		return result, false
@@ -1073,7 +965,7 @@ func (s *Server) toolImplements(args map[string]interface{}) (string, bool) {
 	// Filter to only struct types
 	for _, node := range nodes {
 		if node.Kind == "struct" {
-			result := fmt.Sprintf("## 类型: %s\n\n", shortName(node.Name))
+			result := fmt.Sprintf("## 类型: %s\n\n", display.ShortFuncName(node.Name))
 			result += fmt.Sprintf("- 位置: %s:%d\n\n", node.File, node.Line)
 
 			implInterfaces, err := s.db.GetImplementedInterfaces(node.ID)
@@ -1086,11 +978,11 @@ func (s *Server) toolImplements(args map[string]interface{}) (string, bool) {
 			} else {
 				result += fmt.Sprintf("### 实现的接口 (共 %d 个)\n\n", len(implInterfaces))
 				for _, iface := range implInterfaces {
-					methods := shortSignature(iface.Signature)
+					methods := display.ShortSignature(iface.Signature)
 					if methods == "" {
 						methods = "(空接口)"
 					}
-					result += fmt.Sprintf("- **%s** - %s\n", shortName(iface.Name), methods)
+					result += fmt.Sprintf("- **%s** - %s\n", display.ShortFuncName(iface.Name), methods)
 					result += fmt.Sprintf("  - %s:%d\n", iface.File, iface.Line)
 				}
 			}
@@ -1122,7 +1014,7 @@ func (s *Server) toolRisk(args map[string]interface{}) (string, bool) {
 		result := fmt.Sprintf("## 高风险函数排行 (Top %d)\n\n", limit)
 		for _, r := range risks {
 			riskIcon := getRiskIcon(r.RiskLevel)
-			result += fmt.Sprintf("%s **%s** - %s\n", riskIcon, r.RiskLevel, shortName(r.Node.Name))
+			result += fmt.Sprintf("%s **%s** - %s\n", riskIcon, r.RiskLevel, display.ShortFuncName(r.Node.Name))
 			result += fmt.Sprintf("   调用者: %d | %s:%d\n\n", r.DirectCallers, r.Node.File, r.Node.Line)
 		}
 		result += "风险等级: 🔴critical(>=50) 🟠high(>=20) 🟡medium(>=5) 🟢low\n"
@@ -1149,7 +1041,7 @@ func (s *Server) toolRisk(args map[string]interface{}) (string, bool) {
 	}
 
 	riskIcon := getRiskIcon(risk.RiskLevel)
-	result := fmt.Sprintf("## 变更风险分析: %s\n\n", shortName(risk.Node.Name))
+	result := fmt.Sprintf("## 变更风险分析: %s\n\n", display.ShortFuncName(risk.Node.Name))
 	result += fmt.Sprintf("**位置:** %s:%d\n", risk.Node.File, risk.Node.Line)
 	if risk.Node.Signature != "" {
 		result += fmt.Sprintf("**签名:** `%s`\n", risk.Node.Signature)
@@ -1321,55 +1213,7 @@ func (s *Server) toolMermaid(args map[string]interface{}) (string, bool) {
 
 // Helper functions for Mermaid generation
 
-// shortSignature simplifies package paths in a function signature
-// e.g., "func(db *github.com/jinzhu/gorm.DB) error" -> "func(db *gorm.DB) error"
-func shortSignature(sig string) string {
-	// Find and replace all package paths (anything with / before a .)
-	result := sig
-	for {
-		// Find a package path pattern: xxx/yyy/pkg.
-		start := -1
-		for i := 0; i < len(result); i++ {
-			if result[i] == '/' {
-				// Found a slash, look backwards to find the start
-				start = i
-				for j := i - 1; j >= 0; j-- {
-					c := result[j]
-					if c == ' ' || c == '*' || c == '(' || c == '[' || c == ',' {
-						start = j + 1
-						break
-					}
-					if j == 0 {
-						start = 0
-					}
-				}
-				break
-			}
-		}
-		if start == -1 {
-			break
-		}
 
-		// Find the last / before the next space, ), or end
-		lastSlash := -1
-		for i := start; i < len(result); i++ {
-			if result[i] == '/' {
-				lastSlash = i
-			}
-			if result[i] == ' ' || result[i] == ')' || result[i] == ',' || result[i] == ']' {
-				break
-			}
-		}
-
-		if lastSlash > start {
-			// Replace from start to lastSlash+1 with empty
-			result = result[:start] + result[lastSlash+1:]
-		} else {
-			break
-		}
-	}
-	return result
-}
 
 func shortName(fullName string) string {
 	// Remove package prefix, keep receiver and method name

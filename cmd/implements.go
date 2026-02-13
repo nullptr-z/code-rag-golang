@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/zheng/crag/internal/display"
 	"github.com/zheng/crag/internal/graph"
 	"github.com/zheng/crag/internal/storage"
 )
@@ -43,11 +44,11 @@ func implementsCmd() *cobra.Command {
 
 				fmt.Printf("项目接口列表 (共 %d 个)\n\n", len(interfaces))
 				for _, iface := range interfaces {
-					methods := shortSignature(iface.Signature)
+					methods := display.ShortSignature(iface.Signature)
 					if methods == "" {
 						methods = "(空接口)"
 					}
-					fmt.Printf("  %s\n", shortFuncName(iface.Name))
+					fmt.Printf("  %s\n", display.ShortFuncName(iface.Name))
 					fmt.Printf("    方法: %s\n", methods)
 					fmt.Printf("    位置: %s:%d\n\n", iface.File, iface.Line)
 				}
@@ -71,10 +72,10 @@ func implementsCmd() *cobra.Command {
 					fmt.Printf("找到 %d 个匹配的接口，显示第一个:\n\n", len(interfaces))
 				}
 
-				fmt.Printf("接口: %s\n", shortFuncName(iface.Name))
+				fmt.Printf("接口: %s\n", display.ShortFuncName(iface.Name))
 				fmt.Printf("位置: %s:%d\n", iface.File, iface.Line)
 				if iface.Signature != "" {
-					fmt.Printf("方法: %s\n", shortSignature(iface.Signature))
+					fmt.Printf("方法: %s\n", display.ShortSignature(iface.Signature))
 				}
 				fmt.Println()
 
@@ -88,7 +89,7 @@ func implementsCmd() *cobra.Command {
 				} else {
 					fmt.Printf("实现类型 (共 %d 个):\n\n", len(impls))
 					for _, impl := range impls {
-						fmt.Printf("  %s\n", shortFuncName(impl.Name))
+						fmt.Printf("  %s\n", display.ShortFuncName(impl.Name))
 						fmt.Printf("    %s:%d\n", impl.File, impl.Line)
 					}
 				}
@@ -113,7 +114,7 @@ func implementsCmd() *cobra.Command {
 					fmt.Printf("找到 %d 个匹配的类型，显示第一个:\n\n", len(structTypes))
 				}
 
-				fmt.Printf("类型: %s\n", shortFuncName(typ.Name))
+				fmt.Printf("类型: %s\n", display.ShortFuncName(typ.Name))
 				fmt.Printf("位置: %s:%d\n\n", typ.File, typ.Line)
 
 				implInterfaces, err := db.GetImplementedInterfaces(typ.ID)
@@ -126,11 +127,11 @@ func implementsCmd() *cobra.Command {
 				} else {
 					fmt.Printf("实现的接口 (共 %d 个):\n\n", len(implInterfaces))
 					for _, iface := range implInterfaces {
-						methods := shortSignature(iface.Signature)
+						methods := display.ShortSignature(iface.Signature)
 						if methods == "" {
 							methods = "(空接口)"
 						}
-						fmt.Printf("  %s\n", shortFuncName(iface.Name))
+						fmt.Printf("  %s\n", display.ShortFuncName(iface.Name))
 						fmt.Printf("    方法: %s\n", methods)
 						fmt.Printf("    位置: %s:%d\n\n", iface.File, iface.Line)
 					}

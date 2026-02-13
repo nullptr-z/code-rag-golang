@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/zheng/crag/internal/display"
 	"github.com/zheng/crag/internal/graph"
 	"github.com/zheng/crag/internal/impact"
 	"github.com/zheng/crag/internal/storage"
@@ -43,7 +44,7 @@ func upstreamCmd() *cobra.Command {
 						} else {
 							fmt.Println("找到多个匹配的函数，请选择:")
 							for i, n := range nodes {
-								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
+								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, display.ShortFuncName(n.Name), n.File, n.Line)
 							}
 							fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
@@ -89,13 +90,13 @@ func upstreamCmd() *cobra.Command {
 					return fmt.Errorf("获取调用树失败: %w", err)
 				}
 
-				maxWidth := len(shortFuncName(report.Target.Name))
+				maxWidth := len(display.ShortFuncName(report.Target.Name))
 				maxDepth := 0
-				calcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
+				display.CalcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
 
 				fmt.Println("📍 当前函数")
 				targetPadding := maxWidth + maxDepth*4
-				fmt.Printf("%-*s  %s:%d\n\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+				fmt.Printf("%-*s  %s:%d\n\n", targetPadding, display.ShortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
 
 				if len(callTree) > 0 {
 					fmt.Printf("⬆️ 调用者 (深度 %d)\n", depth)
@@ -150,7 +151,7 @@ func downstreamCmd() *cobra.Command {
 						} else {
 							fmt.Println("找到多个匹配的函数，请选择:")
 							for i, n := range nodes {
-								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
+								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, display.ShortFuncName(n.Name), n.File, n.Line)
 							}
 							fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
@@ -196,13 +197,13 @@ func downstreamCmd() *cobra.Command {
 					return fmt.Errorf("获取调用树失败: %w", err)
 				}
 
-				maxWidth := len(shortFuncName(report.Target.Name))
+				maxWidth := len(display.ShortFuncName(report.Target.Name))
 				maxDepth := 0
-				calcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
+				display.CalcTreeMaxWidth(callTree, &maxWidth, 0, &maxDepth)
 
 				fmt.Println("📍 当前函数")
 				targetPadding := maxWidth + maxDepth*4
-				fmt.Printf("%-*s  %s:%d\n\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+				fmt.Printf("%-*s  %s:%d\n\n", targetPadding, display.ShortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
 
 				if len(callTree) > 0 {
 					fmt.Printf("⬇️ 被调用 (深度 %d)\n", depth)
@@ -258,7 +259,7 @@ func impactCmd() *cobra.Command {
 						} else {
 							fmt.Println("找到多个匹配的函数，请选择:")
 							for i, n := range nodes {
-								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, shortFuncName(n.Name), n.File, n.Line)
+								fmt.Printf("  [%d] %s\n      %s:%d\n", i+1, display.ShortFuncName(n.Name), n.File, n.Line)
 							}
 							fmt.Print("\n请输入序号 [1-" + fmt.Sprint(len(nodes)) + "]: ")
 
@@ -294,7 +295,7 @@ func impactCmd() *cobra.Command {
 						kindLabel = "常量"
 					}
 					fmt.Printf("📍 当前%s\n", kindLabel)
-					fmt.Printf("%s  %s:%d\n", shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+					fmt.Printf("%s  %s:%d\n", display.ShortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
 					if report.Target.Signature != "" {
 						fmt.Printf("   类型: %s\n", report.Target.Signature)
 					}
@@ -307,7 +308,7 @@ func impactCmd() *cobra.Command {
 							if i == len(report.DirectCallers)-1 {
 								prefix = "└──"
 							}
-							fmt.Printf("%s %s  %s:%d\n", prefix, shortFuncName(c.Name), shortFilePath(c.File), c.Line)
+							fmt.Printf("%s %s  %s:%d\n", prefix, display.ShortFuncName(c.Name), shortFilePath(c.File), c.Line)
 						}
 					} else {
 						fmt.Printf("⬆️ 引用此%s的函数\n", kindLabel)
@@ -323,11 +324,11 @@ func impactCmd() *cobra.Command {
 						return fmt.Errorf("获取下游调用树失败: %w", err)
 					}
 
-					maxWidth := len(shortFuncName(report.Target.Name))
+					maxWidth := len(display.ShortFuncName(report.Target.Name))
 					upstreamMaxDepth := 0
 					downstreamMaxDepth := 0
-					calcTreeMaxWidth(upstreamTree, &maxWidth, 0, &upstreamMaxDepth)
-					calcTreeMaxWidth(downstreamTree, &maxWidth, 0, &downstreamMaxDepth)
+					display.CalcTreeMaxWidth(upstreamTree, &maxWidth, 0, &upstreamMaxDepth)
+					display.CalcTreeMaxWidth(downstreamTree, &maxWidth, 0, &downstreamMaxDepth)
 
 					fmt.Println("📍 当前函数")
 					targetMaxDepth := upstreamMaxDepth
@@ -335,9 +336,9 @@ func impactCmd() *cobra.Command {
 						targetMaxDepth = downstreamMaxDepth
 					}
 					targetPadding := maxWidth + targetMaxDepth*4
-					fmt.Printf("%-*s  %s:%d\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+					fmt.Printf("%-*s  %s:%d\n", targetPadding, display.ShortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
 					if report.Target.Signature != "" {
-						fmt.Printf("   %s\n", shortSignature(report.Target.Signature))
+						fmt.Printf("   %s\n", display.ShortSignature(report.Target.Signature))
 					}
 					fmt.Println()
 

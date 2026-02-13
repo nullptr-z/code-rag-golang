@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/zheng/crag/internal/display"
 	"github.com/zheng/crag/internal/storage"
 )
 
@@ -48,7 +49,7 @@ func riskCmd() *cobra.Command {
 				fmt.Printf("高风险函数排行 (Top %d)\n\n", limit)
 				for _, r := range risks {
 					riskIcon := getRiskIcon(r.RiskLevel)
-					fmt.Printf("%s %-8s  %s\n", riskIcon, r.RiskLevel, shortFuncName(r.Node.Name))
+					fmt.Printf("%s %-8s  %s\n", riskIcon, r.RiskLevel, display.ShortFuncName(r.Node.Name))
 					fmt.Printf("             调用者: %d  %s:%d\n\n", r.DirectCallers, r.Node.File, r.Node.Line)
 				}
 
@@ -75,10 +76,10 @@ func riskCmd() *cobra.Command {
 			}
 
 			riskIcon := getRiskIcon(risk.RiskLevel)
-			fmt.Printf("## 变更风险分析: %s\n\n", shortFuncName(risk.Node.Name))
+			fmt.Printf("## 变更风险分析: %s\n\n", display.ShortFuncName(risk.Node.Name))
 			fmt.Printf("**位置:** %s:%d\n", risk.Node.File, risk.Node.Line)
 			if risk.Node.Signature != "" {
-				fmt.Printf("**签名:** `%s`\n", shortSignature(risk.Node.Signature))
+				fmt.Printf("**签名:** `%s`\n", display.ShortSignature(risk.Node.Signature))
 			}
 			fmt.Println()
 

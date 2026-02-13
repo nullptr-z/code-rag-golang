@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"strings"
 
 	"github.com/zheng/crag/internal/graph"
 )
@@ -50,6 +51,11 @@ func (db *DB) GetNodeByID(id int64) (*graph.Node, error) {
 // FindNodesByPattern returns nodes matching a name pattern (using LIKE)
 // Results are sorted by match quality: exact short name match > ends with pattern > contains pattern
 func (db *DB) FindNodesByPattern(pattern string) ([]*graph.Node, error) {
+	// First, try exact name match (full qualified name)
+	if node, err := db.GetNodeByName(pattern); err == nil {
+		return []*graph.Node{node}, nil
+	}
+
 	// Use a query that sorts by match quality:
 	// 1. Exact match on short name (after last dot or after ").")
 	// 2. Name ends with the pattern (e.g., "pkg.FuncName" matches "FuncName")
@@ -73,7 +79,52 @@ func (db *DB) FindNodesByPattern(pattern string) ([]*graph.Node, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanNodes(rows)
+
+	nodes, err := scanNodes(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Exact match priority: if multiple results found, check if exactly one
+	// matches the pattern as a complete identifier (not just a substring).
+	// This prevents the infinite disambiguation loop where e.g. "pkg.Foo"
+	// matches both "pkg.Foo" and "pkg.FooBar", "(*pkg.Foo).Method", etc.
+	if len(nodes) > 1 {
+		var exactMatches []*graph.Node
+		for _, n := range nodes {
+			if isExactNameMatch(n.Name, pattern) {
+				exactMatches = append(exactMatches, n)
+			}
+		}
+		if len(exactMatches) == 1 {
+			return exactMatches, nil
+		}
+	}
+
+	return nodes, nil
+}
+
+// isExactNameMatch checks if pattern matches the node's full name as a complete
+// identifier, not just as a substring of a longer name.
+// For example, pattern "pkg.Foo" exactly matches "github.com/x/pkg.Foo"
+// but NOT "github.com/x/pkg.FooBar" or "(*github.com/x/pkg.Foo).Method".
+func isExactNameMatch(fullName, pattern string) bool {
+	if fullName == pattern {
+		return true
+	}
+	// pattern matches after "/" (package path separator)
+	if strings.HasSuffix(fullName, "/"+pattern) {
+		return true
+	}
+	// pattern matches after "." (for short names like "FuncName")
+	if strings.HasSuffix(fullName, "."+pattern) {
+		return true
+	}
+	// pattern matches after ")." (for method names like "Method")
+	if strings.HasSuffix(fullName, ")."+pattern) {
+		return true
+	}
+	return false
 }
 
 // GetDirectCallers returns functions that directly call the given function

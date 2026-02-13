@@ -889,3 +889,58 @@ func CalculateRiskLevelFast(directCallers int) string {
 	}
 	return "low"
 }
+
+// GetSummaryByKind returns the count of nodes grouped by kind
+func (db *DB) GetSummaryByKind() (map[string]int64, error) {
+	rows, err := db.conn.Query(`SELECT kind, COUNT(*) FROM nodes GROUP BY kind`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64)
+	for rows.Next() {
+		var kind string
+		var count int64
+		if err := rows.Scan(&kind, &count); err != nil {
+			return nil, err
+		}
+		result[kind] = count
+	}
+	return result, rows.Err()
+}
+
+// PackageSummary holds per-package statistics
+type PackageSummary struct {
+	Package    string
+	FuncCount  int64
+	VarCount   int64
+	ConstCount int64
+}
+
+// GetPackageSummary returns per-package counts of functions, variables, and constants
+func (db *DB) GetPackageSummary() ([]*PackageSummary, error) {
+	rows, err := db.conn.Query(`
+		SELECT package,
+			SUM(CASE WHEN kind = 'func' THEN 1 ELSE 0 END) as func_count,
+			SUM(CASE WHEN kind = 'var' THEN 1 ELSE 0 END) as var_count,
+			SUM(CASE WHEN kind = 'const' THEN 1 ELSE 0 END) as const_count
+		FROM nodes
+		WHERE kind IN ('func', 'var', 'const')
+		GROUP BY package
+		ORDER BY func_count DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*PackageSummary
+	for rows.Next() {
+		var s PackageSummary
+		if err := rows.Scan(&s.Package, &s.FuncCount, &s.VarCount, &s.ConstCount); err != nil {
+			return nil, err
+		}
+		results = append(results, &s)
+	}
+	return results, rows.Err()
+}

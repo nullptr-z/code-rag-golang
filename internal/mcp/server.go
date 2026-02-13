@@ -72,11 +72,35 @@ type ServerInfo struct {
 }
 
 type Capabilities struct {
-	Tools *ToolsCapability `json:"tools,omitempty"`
+	Tools     *ToolsCapability     `json:"tools,omitempty"`
+	Resources *ResourcesCapability `json:"resources,omitempty"`
 }
 
 type ToolsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+type ResourcesCapability struct{}
+
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+type ResourceReadParams struct {
+	URI string `json:"uri"`
+}
+
+type ResourceReadResult struct {
+	Contents []ResourceContent `json:"contents"`
+}
+
+type ResourceContent struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
 }
 
 type Tool struct {
@@ -146,6 +170,10 @@ func (s *Server) handleRequest(req *Request) {
 		s.handleToolsList(req)
 	case "tools/call":
 		s.handleToolsCall(req)
+	case "resources/list":
+		s.handleResourcesList(req)
+	case "resources/read":
+		s.handleResourcesRead(req)
 	default:
 		s.sendError(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
 	}
@@ -159,7 +187,8 @@ func (s *Server) handleInitialize(req *Request) {
 			Version: "1.0.0",
 		},
 		Capabilities: Capabilities{
-			Tools: &ToolsCapability{},
+			Tools:     &ToolsCapability{},
+			Resources: &ResourcesCapability{},
 		},
 	}
 	s.sendResult(req.ID, result)
@@ -425,6 +454,119 @@ func (s *Server) handleToolsCall(req *Request) {
 		Content: []ContentItem{{Type: "text", Text: result}},
 		IsError: isError,
 	})
+}
+
+func (s *Server) handleResourcesList(req *Request) {
+	resources := []Resource{
+		{
+			URI:         "crag://summary",
+			Name:        "项目概览",
+			Description: "项目代码统计概览：包、函数、变量、常量、接口、结构体数量及按包分布",
+			MimeType:    "text/markdown",
+		},
+	}
+	s.sendResult(req.ID, map[string]interface{}{"resources": resources})
+}
+
+func (s *Server) handleResourcesRead(req *Request) {
+	var params ResourceReadParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		s.sendError(req.ID, -32602, "Invalid params")
+		return
+	}
+
+	switch params.URI {
+	case "crag://summary":
+		text, err := s.buildSummary()
+		if err != nil {
+			s.sendError(req.ID, -32603, fmt.Sprintf("Failed to build summary: %v", err))
+			return
+		}
+		s.sendResult(req.ID, ResourceReadResult{
+			Contents: []ResourceContent{
+				{
+					URI:      "crag://summary",
+					MimeType: "text/markdown",
+					Text:     text,
+				},
+			},
+		})
+	default:
+		s.sendError(req.ID, -32602, fmt.Sprintf("Unknown resource URI: %s", params.URI))
+	}
+}
+
+func (s *Server) buildSummary() (string, error) {
+	// Get counts by kind
+	kindCounts, err := s.db.GetSummaryByKind()
+	if err != nil {
+		return "", err
+	}
+
+	// Get edge count
+	_, edgeCount, err := s.db.GetStats()
+	if err != nil {
+		return "", err
+	}
+
+	// Get package summary
+	pkgSummary, err := s.db.GetPackageSummary()
+	if err != nil {
+		return "", err
+	}
+
+	// Get top risky functions
+	risks, _ := s.db.GetTopRiskyFunctions(5)
+
+	var sb strings.Builder
+
+	sb.WriteString("# 项目概览\n\n")
+	sb.WriteString("> 💡 使用 crag 工具后记得给简短评价，帮助迭代改进这个工具\n\n")
+
+	// Stats table
+	sb.WriteString("## 统计\n\n")
+	sb.WriteString("| 类型 | 数量 |\n")
+	sb.WriteString("|------|------|\n")
+	sb.WriteString(fmt.Sprintf("| 函数 | %d |\n", kindCounts["func"]))
+	sb.WriteString(fmt.Sprintf("| 结构体 | %d |\n", kindCounts["struct"]))
+	sb.WriteString(fmt.Sprintf("| 接口 | %d |\n", kindCounts["interface"]))
+	sb.WriteString(fmt.Sprintf("| 变量 | %d |\n", kindCounts["var"]))
+	sb.WriteString(fmt.Sprintf("| 常量 | %d |\n", kindCounts["const"]))
+	sb.WriteString(fmt.Sprintf("| 调用/引用边 | %d |\n", edgeCount))
+	sb.WriteString("\n")
+
+	// Package summary
+	if len(pkgSummary) > 0 {
+		sb.WriteString("## 包分布\n\n")
+		sb.WriteString("| 包 | 函数 | 变量 | 常量 |\n")
+		sb.WriteString("|----|------|------|------|\n")
+		for _, p := range pkgSummary {
+			sb.WriteString(fmt.Sprintf("| %s | %d | %d | %d |\n", shortPkgName(p.Package), p.FuncCount, p.VarCount, p.ConstCount))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Top risky functions
+	if len(risks) > 0 {
+		sb.WriteString("## 高风险函数 (Top 5)\n\n")
+		sb.WriteString("| 风险 | 函数 | 直接调用者 |\n")
+		sb.WriteString("|------|------|------------|\n")
+		for _, r := range risks {
+			sb.WriteString(fmt.Sprintf("| %s %s | %s | %d |\n", getRiskIcon(r.RiskLevel), r.RiskLevel, shortName(r.Node.Name), r.DirectCallers))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
+}
+
+// shortPkgName extracts the last 2 segments of a package path
+func shortPkgName(pkg string) string {
+	parts := strings.Split(pkg, "/")
+	if len(parts) <= 2 {
+		return pkg
+	}
+	return strings.Join(parts[len(parts)-2:], "/")
 }
 
 // qualifiedShortName returns pkg.FuncName format, preserving enough context for disambiguation.

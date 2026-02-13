@@ -1,7 +1,7 @@
--- 节点表：存储函数、结构体、接口
+-- 节点表：存储函数、结构体、接口、变量、常量
 CREATE TABLE IF NOT EXISTS nodes (
     id INTEGER PRIMARY KEY,
-    kind TEXT NOT NULL,           -- 'func', 'struct', 'interface', 'package'
+    kind TEXT NOT NULL,           -- 'func', 'struct', 'interface', 'package', 'var', 'const'
     name TEXT NOT NULL,           -- 完整限定名 (pkg.Name)
     package TEXT NOT NULL,        -- 包路径
     file TEXT NOT NULL,           -- 源文件路径

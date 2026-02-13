@@ -255,12 +255,12 @@ func (s *Server) handleToolsList(req *Request) {
 		},
 		{
 			Name: "search",
-			Description: `搜索项目中的函数。支持模糊匹配，短名称优先。
+			Description: `搜索项目中的函数、变量、常量等。支持模糊匹配，短名称优先。
 使用场景：
-- 不确定函数完整名称时
-- 查找包含某关键字的所有函数
+- 不确定函数/变量完整名称时
+- 查找包含某关键字的所有函数和变量
 - 探索项目结构
-示例：搜索 'Handler' 会找到所有包含 Handler 的函数`,
+示例：搜索 'Handler' 会找到所有包含 Handler 的函数和变量`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -279,14 +279,18 @@ func (s *Server) handleToolsList(req *Request) {
 		},
 		{
 			Name: "list",
-			Description: `列出项目中的所有函数。用于了解项目整体结构。
+			Description: `列出项目中的函数、变量、常量等。用于了解项目整体结构。
 使用场景：
 - 初次了解项目时
-- 查看项目有哪些主要函数
+- 查看项目有哪些主要函数/变量/常量
 - 配合 offset 分页浏览`,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
+					"kind": {
+						Type:        "string",
+						Description: "过滤类型: func(默认)/var/const/interface/struct",
+					},
 					"limit": {
 						Type:        "number",
 						Description: "返回数量，默认 50",
@@ -467,10 +471,10 @@ func (s *Server) toolImpact(args map[string]interface{}) (string, bool) {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 
-	return formatImpactWithLimit(report, limit), false
+	return s.formatImpactWithDepth(report, limit), false
 }
 
-func formatImpactWithLimit(report *impact.ImpactReport, limit int) string {
+func (s *Server) formatImpactWithDepth(report *impact.ImpactReport, limit int) string {
 	var result string
 
 	result += fmt.Sprintf("## 变更影响分析: %s\n\n", report.Target.Name)
@@ -484,19 +488,70 @@ func formatImpactWithLimit(report *impact.ImpactReport, limit int) string {
 		result += fmt.Sprintf("**文档:** %s\n\n", report.Target.Doc)
 	}
 
+	// For var/const, direct callers are referencing functions (no depth hierarchy)
+	isVarConst := report.Target.Kind == graph.NodeKindVar || report.Target.Kind == graph.NodeKindConst
+
+	if isVarConst {
+		// var/const: show referencing functions without depth
+		result += "### 引用此变量/常量的函数\n\n"
+		if len(report.DirectCallers) == 0 {
+			result += "_无引用_\n\n"
+		} else {
+			total := len(report.DirectCallers)
+			callers := report.DirectCallers
+			if len(callers) > limit {
+				callers = callers[:limit]
+			}
+			result += "| 函数 | 文件 | 行号 |\n"
+			result += "|------|------|------|\n"
+			for _, c := range callers {
+				result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
+			}
+			if total > limit {
+				result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
+			}
+			result += "\n"
+		}
+		return result
+	}
+
+	// For functions: query with depth info
+	allCallers, _ := s.db.GetUpstreamCallersWithDepth(report.Target.ID, 3)
+	allCallees, _ := s.db.GetDownstreamCalleesWithDepth(report.Target.ID, 2)
+
+	// Split callers into direct (depth=1) and indirect (depth>1)
+	var directCallers, indirectCallers []*storage.NodeWithDepth
+	for _, c := range allCallers {
+		if c.Depth == 1 {
+			directCallers = append(directCallers, c)
+		} else {
+			indirectCallers = append(indirectCallers, c)
+		}
+	}
+
+	// Split callees into direct (depth=1) and indirect (depth>1)
+	var directCallees, indirectCallees []*storage.NodeWithDepth
+	for _, c := range allCallees {
+		if c.Depth == 1 {
+			directCallees = append(directCallees, c)
+		} else {
+			indirectCallees = append(indirectCallees, c)
+		}
+	}
+
 	// Direct callers
 	result += "### 直接调用者 (需检查是否需要同步修改)\n\n"
-	if len(report.DirectCallers) == 0 {
+	if len(directCallers) == 0 {
 		result += "_无直接调用者_\n\n"
 	} else {
-		total := len(report.DirectCallers)
-		callers := report.DirectCallers
-		if len(callers) > limit {
-			callers = callers[:limit]
+		total := len(directCallers)
+		items := directCallers
+		if len(items) > limit {
+			items = items[:limit]
 		}
 		result += "| 函数 | 文件 | 行号 |\n"
 		result += "|------|------|------|\n"
-		for _, c := range callers {
+		for _, c := range items {
 			result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
 		}
 		if total > limit {
@@ -505,18 +560,18 @@ func formatImpactWithLimit(report *impact.ImpactReport, limit int) string {
 		result += "\n"
 	}
 
-	// Indirect callers
-	if len(report.IndirectCallers) > 0 {
+	// Indirect callers with depth
+	if len(indirectCallers) > 0 {
 		result += "### 间接调用者 (可能受影响)\n\n"
-		total := len(report.IndirectCallers)
-		callers := report.IndirectCallers
-		if len(callers) > limit {
-			callers = callers[:limit]
+		total := len(indirectCallers)
+		items := indirectCallers
+		if len(items) > limit {
+			items = items[:limit]
 		}
-		result += "| 函数 | 文件 | 行号 |\n"
-		result += "|------|------|------|\n"
-		for _, c := range callers {
-			result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
+		result += "| 深度 | 函数 | 文件 | 行号 |\n"
+		result += "|------|------|------|------|\n"
+		for _, c := range items {
+			result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
 		}
 		if total > limit {
 			result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
@@ -526,17 +581,17 @@ func formatImpactWithLimit(report *impact.ImpactReport, limit int) string {
 
 	// Direct callees
 	result += "### 下游依赖 (本函数调用的)\n\n"
-	if len(report.DirectCallees) == 0 {
+	if len(directCallees) == 0 {
 		result += "_无下游依赖_\n\n"
 	} else {
-		total := len(report.DirectCallees)
-		callees := report.DirectCallees
-		if len(callees) > limit {
-			callees = callees[:limit]
+		total := len(directCallees)
+		items := directCallees
+		if len(items) > limit {
+			items = items[:limit]
 		}
 		result += "| 函数 | 文件 | 行号 |\n"
 		result += "|------|------|------|\n"
-		for _, c := range callees {
+		for _, c := range items {
 			result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
 		}
 		if total > limit {
@@ -545,18 +600,18 @@ func formatImpactWithLimit(report *impact.ImpactReport, limit int) string {
 		result += "\n"
 	}
 
-	// Indirect callees
-	if len(report.IndirectCallees) > 0 {
+	// Indirect callees with depth
+	if len(indirectCallees) > 0 {
 		result += "### 间接下游依赖\n\n"
-		total := len(report.IndirectCallees)
-		callees := report.IndirectCallees
-		if len(callees) > limit {
-			callees = callees[:limit]
+		total := len(indirectCallees)
+		items := indirectCallees
+		if len(items) > limit {
+			items = items[:limit]
 		}
-		result += "| 函数 | 文件 | 行号 |\n"
-		result += "|------|------|------|\n"
-		for _, c := range callees {
-			result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
+		result += "| 深度 | 函数 | 文件 | 行号 |\n"
+		result += "|------|------|------|------|\n"
+		for _, c := range items {
+			result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
 		}
 		if total > limit {
 			result += fmt.Sprintf("\n_（共 %d 个，仅显示前 %d 个）_\n", total, limit)
@@ -596,7 +651,7 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 	}
 
 	node := nodes[0]
-	callers, err := s.db.GetUpstreamCallers(node.ID, depth)
+	callers, err := s.db.GetUpstreamCallersWithDepth(node.ID, depth)
 	if err != nil {
 		return fmt.Sprintf("错误：%v", err), true
 	}
@@ -611,10 +666,10 @@ func (s *Server) toolUpstream(args map[string]interface{}) (string, bool) {
 	}
 
 	result := fmt.Sprintf("## %s 的上游调用者\n\n", funcName)
-	result += "| 函数 | 文件 | 行号 |\n"
-	result += "|------|------|------|\n"
+	result += "| 深度 | 函数 | 文件 | 行号 |\n"
+	result += "|------|------|------|------|\n"
 	for _, c := range callers {
-		result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
+		result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
 	}
 
 	if total > limit {
@@ -653,7 +708,7 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 	}
 
 	node := nodes[0]
-	callees, err := s.db.GetDownstreamCallees(node.ID, depth)
+	callees, err := s.db.GetDownstreamCalleesWithDepth(node.ID, depth)
 	if err != nil {
 		return fmt.Sprintf("错误：%v", err), true
 	}
@@ -668,10 +723,10 @@ func (s *Server) toolDownstream(args map[string]interface{}) (string, bool) {
 	}
 
 	result := fmt.Sprintf("## %s 的下游调用\n\n", funcName)
-	result += "| 函数 | 文件 | 行号 |\n"
-	result += "|------|------|------|\n"
+	result += "| 深度 | 函数 | 文件 | 行号 |\n"
+	result += "|------|------|------|------|\n"
 	for _, c := range callees {
-		result += fmt.Sprintf("| %s | %s | %d |\n", c.Name, c.File, c.Line)
+		result += fmt.Sprintf("| %d | %s | %s | %d |\n", c.Depth, c.Name, c.File, c.Line)
 	}
 
 	if total > limit {
@@ -712,10 +767,10 @@ func (s *Server) toolSearch(args map[string]interface{}) (string, bool) {
 	}
 	result += "\n\n"
 
-	result += "| 函数 | 文件 | 行号 |\n"
-	result += "|------|------|------|\n"
+	result += "| 类型 | 函数 | 文件 | 行号 |\n"
+	result += "|------|------|------|------|\n"
 	for _, n := range nodes {
-		result += fmt.Sprintf("| %s | %s | %d |\n", n.Name, n.File, n.Line)
+		result += fmt.Sprintf("| %s | %s | %s | %d |\n", n.Kind, n.Name, n.File, n.Line)
 	}
 
 	return result, false
@@ -732,42 +787,68 @@ func (s *Server) toolList(args map[string]interface{}) (string, bool) {
 		offset = int(o)
 	}
 
-	funcs, err := s.db.GetAllFunctions()
+	kind := "func"
+	if k, ok := args["kind"].(string); ok && k != "" {
+		kind = k
+	}
+
+	var nodes []*graph.Node
+	var err error
+	var kindLabel string
+	switch kind {
+	case "var":
+		nodes, err = s.db.GetAllVars()
+		kindLabel = "变量"
+	case "const":
+		nodes, err = s.db.GetAllConsts()
+		kindLabel = "常量"
+	case "func":
+		nodes, err = s.db.GetAllFunctions()
+		kindLabel = "函数"
+	case "interface":
+		nodes, err = s.db.GetAllInterfaces()
+		kindLabel = "接口"
+	case "struct":
+		nodes, err = s.db.GetAllTypes()
+		kindLabel = "结构体"
+	default:
+		return fmt.Sprintf("未知类型: %s，支持: func/var/const/interface/struct", kind), true
+	}
 	if err != nil {
 		return fmt.Sprintf("错误：%v", err), true
 	}
 
-	if len(funcs) == 0 {
-		return "项目中没有函数", false
+	if len(nodes) == 0 {
+		return fmt.Sprintf("项目中没有%s", kindLabel), false
 	}
 
-	total := len(funcs)
+	total := len(nodes)
 
 	// Apply offset
 	if offset >= total {
-		return fmt.Sprintf("偏移量 %d 超出范围（共 %d 个函数）", offset, total), false
+		return fmt.Sprintf("偏移量 %d 超出范围（共 %d 个%s）", offset, total, kindLabel), false
 	}
 	if offset > 0 {
-		funcs = funcs[offset:]
+		nodes = nodes[offset:]
 	}
 
 	// Apply limit
-	displayed := len(funcs)
-	if limit > 0 && limit < len(funcs) {
-		funcs = funcs[:limit]
+	displayed := len(nodes)
+	if limit > 0 && limit < len(nodes) {
+		nodes = nodes[:limit]
 		displayed = limit
 	}
 
-	result := fmt.Sprintf("## 函数列表\n\n共 %d 个函数", total)
+	result := fmt.Sprintf("## %s列表\n\n共 %d 个%s", kindLabel, total, kindLabel)
 	if offset > 0 || displayed < total-offset {
 		result += fmt.Sprintf("（显示 %d-%d）", offset+1, offset+displayed)
 	}
 	result += "\n\n"
 
-	result += "| 函数 | 文件 | 行号 |\n"
+	result += "| 名称 | 文件 | 行号 |\n"
 	result += "|------|------|------|\n"
-	for _, f := range funcs {
-		result += fmt.Sprintf("| %s | %s | %d |\n", f.Name, f.File, f.Line)
+	for _, n := range nodes {
+		result += fmt.Sprintf("| %s | %s | %d |\n", n.Name, n.File, n.Line)
 	}
 
 	return result, false

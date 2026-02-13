@@ -306,3 +306,13 @@ func (b *Builder) GetNodeCount() int {
 	return len(b.nodeMap)
 }
 
+// GetNodeMap returns a copy of the function name -> node ID mapping.
+// Used by other analyzers that need to create edges to existing function nodes.
+func (b *Builder) GetNodeMap() map[string]int64 {
+	result := make(map[string]int64, len(b.nodeMap))
+	for k, v := range b.nodeMap {
+		result[k] = v
+	}
+	return result
+}
+

@@ -8,6 +8,8 @@ const (
 	NodeKindStruct    NodeKind = "struct"
 	NodeKindInterface NodeKind = "interface"
 	NodeKindPackage   NodeKind = "package"
+	NodeKindVar       NodeKind = "var"
+	NodeKindConst     NodeKind = "const"
 )
 
 // Node represents a code element in the call graph

@@ -271,6 +271,14 @@ func (w *Watcher) runAnalysis() (nodeCount, edgeCount int64, err error) {
 		return 0, 0, fmt.Errorf("failed to build graph: %w", err)
 	}
 
+	// Build interface implementation graph
+	interfaceAnalyzer := analyzer.NewInterfaceAnalyzer(pkgs, w.projectPath)
+	interfaceAnalyzer.BuildInterfaceGraph(db.InsertNode, db.InsertEdge)
+
+	// Build var/const reference graph
+	varConstAnalyzer := analyzer.NewVarConstAnalyzer(pkgs, w.projectPath)
+	varConstAnalyzer.BuildVarConstGraph(db.InsertNode, db.InsertEdge, builder.GetNodeMap())
+
 	nodeCount, edgeCount, _ = db.GetStats()
 	return nodeCount, edgeCount, nil
 }

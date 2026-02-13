@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/zheng/crag/internal/graph"
 	"github.com/zheng/crag/internal/impact"
 	"github.com/zheng/crag/internal/storage"
 )
@@ -286,48 +287,76 @@ func impactCmd() *cobra.Command {
 			case "markdown":
 				fmt.Print(report.FormatMarkdown())
 			default:
-				upstreamTree, err := db.GetUpstreamCallTree(report.Target.ID, upstreamDepth)
-				if err != nil {
-					return fmt.Errorf("获取上游调用树失败: %w", err)
-				}
-				downstreamTree, err := db.GetDownstreamCallTree(report.Target.ID, downstreamDepth)
-				if err != nil {
-					return fmt.Errorf("获取下游调用树失败: %w", err)
-				}
+				// For var/const, show referencing functions directly from report
+				if report.Target.Kind == graph.NodeKindVar || report.Target.Kind == graph.NodeKindConst {
+					kindLabel := "变量"
+					if report.Target.Kind == graph.NodeKindConst {
+						kindLabel = "常量"
+					}
+					fmt.Printf("📍 当前%s\n", kindLabel)
+					fmt.Printf("%s  %s:%d\n", shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+					if report.Target.Signature != "" {
+						fmt.Printf("   类型: %s\n", report.Target.Signature)
+					}
+					fmt.Println()
 
-				maxWidth := len(shortFuncName(report.Target.Name))
-				upstreamMaxDepth := 0
-				downstreamMaxDepth := 0
-				calcTreeMaxWidth(upstreamTree, &maxWidth, 0, &upstreamMaxDepth)
-				calcTreeMaxWidth(downstreamTree, &maxWidth, 0, &downstreamMaxDepth)
-
-				fmt.Println("📍 当前函数")
-				targetMaxDepth := upstreamMaxDepth
-				if downstreamMaxDepth > targetMaxDepth {
-					targetMaxDepth = downstreamMaxDepth
-				}
-				targetPadding := maxWidth + targetMaxDepth*4
-				fmt.Printf("%-*s  %s:%d\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
-				if report.Target.Signature != "" {
-					fmt.Printf("   %s\n", shortSignature(report.Target.Signature))
-				}
-				fmt.Println()
-
-				if len(upstreamTree) > 0 {
-					fmt.Printf("⬆️ 调用者 (深度 %d)\n", upstreamDepth)
-					printCallTree(upstreamTree, "", true, maxWidth, upstreamMaxDepth, 0)
+					if len(report.DirectCallers) > 0 {
+						fmt.Printf("⬆️ 引用此%s的函数 (共 %d 个)\n", kindLabel, len(report.DirectCallers))
+						for i, c := range report.DirectCallers {
+							prefix := "├──"
+							if i == len(report.DirectCallers)-1 {
+								prefix = "└──"
+							}
+							fmt.Printf("%s %s  %s:%d\n", prefix, shortFuncName(c.Name), shortFilePath(c.File), c.Line)
+						}
+					} else {
+						fmt.Printf("⬆️ 引用此%s的函数\n", kindLabel)
+						fmt.Println("└── (无)")
+					}
 				} else {
-					fmt.Println("⬆️ 调用者")
-					fmt.Println("└── (无)")
-				}
-				fmt.Println()
+					upstreamTree, err := db.GetUpstreamCallTree(report.Target.ID, upstreamDepth)
+					if err != nil {
+						return fmt.Errorf("获取上游调用树失败: %w", err)
+					}
+					downstreamTree, err := db.GetDownstreamCallTree(report.Target.ID, downstreamDepth)
+					if err != nil {
+						return fmt.Errorf("获取下游调用树失败: %w", err)
+					}
 
-				if len(downstreamTree) > 0 {
-					fmt.Printf("⬇️ 被调用 (深度 %d)\n", downstreamDepth)
-					printCallTree(downstreamTree, "", false, maxWidth, downstreamMaxDepth, 0)
-				} else {
-					fmt.Println("⬇️ 被调用")
-					fmt.Println("└── (无)")
+					maxWidth := len(shortFuncName(report.Target.Name))
+					upstreamMaxDepth := 0
+					downstreamMaxDepth := 0
+					calcTreeMaxWidth(upstreamTree, &maxWidth, 0, &upstreamMaxDepth)
+					calcTreeMaxWidth(downstreamTree, &maxWidth, 0, &downstreamMaxDepth)
+
+					fmt.Println("📍 当前函数")
+					targetMaxDepth := upstreamMaxDepth
+					if downstreamMaxDepth > targetMaxDepth {
+						targetMaxDepth = downstreamMaxDepth
+					}
+					targetPadding := maxWidth + targetMaxDepth*4
+					fmt.Printf("%-*s  %s:%d\n", targetPadding, shortFuncName(report.Target.Name), shortFilePath(report.Target.File), report.Target.Line)
+					if report.Target.Signature != "" {
+						fmt.Printf("   %s\n", shortSignature(report.Target.Signature))
+					}
+					fmt.Println()
+
+					if len(upstreamTree) > 0 {
+						fmt.Printf("⬆️ 调用者 (深度 %d)\n", upstreamDepth)
+						printCallTree(upstreamTree, "", true, maxWidth, upstreamMaxDepth, 0)
+					} else {
+						fmt.Println("⬆️ 调用者")
+						fmt.Println("└── (无)")
+					}
+					fmt.Println()
+
+					if len(downstreamTree) > 0 {
+						fmt.Printf("⬇️ 被调用 (深度 %d)\n", downstreamDepth)
+						printCallTree(downstreamTree, "", false, maxWidth, downstreamMaxDepth, 0)
+					} else {
+						fmt.Println("⬇️ 被调用")
+						fmt.Println("└── (无)")
+					}
 				}
 			}
 
@@ -345,10 +374,11 @@ func impactCmd() *cobra.Command {
 
 func listCmd() *cobra.Command {
 	var limit int
+	var kind string
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "列出所有函数",
+		Short: "列出所有函数/变量/常量",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			db, err := storage.Open(DbPath)
 			if err != nil {
@@ -356,20 +386,40 @@ func listCmd() *cobra.Command {
 			}
 			defer db.Close()
 
-			funcs, err := db.GetAllFunctions()
+			var nodes []*graph.Node
+			var kindLabel string
+			switch kind {
+			case "var":
+				nodes, err = db.GetAllVars()
+				kindLabel = "变量"
+			case "const":
+				nodes, err = db.GetAllConsts()
+				kindLabel = "常量"
+			case "func":
+				nodes, err = db.GetAllFunctions()
+				kindLabel = "函数"
+			case "interface":
+				nodes, err = db.GetAllInterfaces()
+				kindLabel = "接口"
+			case "struct":
+				nodes, err = db.GetAllTypes()
+				kindLabel = "结构体"
+			default:
+				return fmt.Errorf("未知类型: %s，支持: func/var/const/interface/struct", kind)
+			}
 			if err != nil {
 				return fmt.Errorf("查询失败: %w", err)
 			}
 
-			fmt.Printf("共 %d 个函数:\n\n", len(funcs))
+			fmt.Printf("共 %d 个%s:\n\n", len(nodes), kindLabel)
 
 			count := 0
-			for _, f := range funcs {
+			for _, n := range nodes {
 				if limit > 0 && count >= limit {
-					fmt.Printf("... 还有 %d 个函数\n", len(funcs)-limit)
+					fmt.Printf("... 还有 %d 个%s\n", len(nodes)-limit, kindLabel)
 					break
 				}
-				fmt.Printf("  %s\n    %s:%d\n", f.Name, f.File, f.Line)
+				fmt.Printf("  %s\n    %s:%d\n", n.Name, n.File, n.Line)
 				count++
 			}
 
@@ -378,6 +428,7 @@ func listCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", 0, "限制显示数量 (0=全部)")
+	cmd.Flags().StringVar(&kind, "kind", "func", "过滤类型: func/var/const/interface/struct")
 
 	return cmd
 }
@@ -385,7 +436,7 @@ func listCmd() *cobra.Command {
 func searchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "search <pattern>",
-		Short: "搜索函数",
+		Short: "搜索函数/变量/常量",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pattern := args[0]
@@ -396,19 +447,19 @@ func searchCmd() *cobra.Command {
 			}
 			defer db.Close()
 
-			funcs, err := db.FindNodesByPattern(pattern)
+			nodes, err := db.FindNodesByPattern(pattern)
 			if err != nil {
 				return fmt.Errorf("搜索失败: %w", err)
 			}
 
-			if len(funcs) == 0 {
-				fmt.Println("未找到匹配的函数")
+			if len(nodes) == 0 {
+				fmt.Println("未找到匹配的结果")
 				return nil
 			}
 
-			fmt.Printf("找到 %d 个匹配:\n\n", len(funcs))
-			for _, f := range funcs {
-				fmt.Printf("  %s\n    %s:%d\n", f.Name, f.File, f.Line)
+			fmt.Printf("找到 %d 个匹配:\n\n", len(nodes))
+			for _, n := range nodes {
+				fmt.Printf("  [%s] %s\n    %s:%d\n", n.Kind, n.Name, n.File, n.Line)
 			}
 
 			return nil

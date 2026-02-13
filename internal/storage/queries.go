@@ -408,6 +408,133 @@ func scanNodes(rows *sql.Rows) ([]*graph.Node, error) {
 	return nodes, rows.Err()
 }
 
+// NodeWithDepth wraps a Node with its depth in the call chain
+type NodeWithDepth struct {
+	*graph.Node
+	Depth int `json:"depth"`
+}
+
+func scanNodesWithDepth(rows *sql.Rows) ([]*NodeWithDepth, error) {
+	var nodes []*NodeWithDepth
+	for rows.Next() {
+		var n graph.Node
+		var depth int
+		var signature, doc sql.NullString
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Name, &n.Package, &n.File, &n.Line, &signature, &doc, &depth); err != nil {
+			return nil, err
+		}
+		if signature.Valid {
+			n.Signature = signature.String
+		}
+		if doc.Valid {
+			n.Doc = doc.String
+		}
+		nodeCopy := n
+		nodes = append(nodes, &NodeWithDepth{Node: &nodeCopy, Depth: depth})
+	}
+	return nodes, rows.Err()
+}
+
+// GetUpstreamCallersWithDepth returns all upstream callers with their depth in the call chain.
+// Uses MIN(depth) to get the shortest path depth for each caller.
+func (db *DB) GetUpstreamCallersWithDepth(nodeID int64, maxDepth int) ([]*NodeWithDepth, error) {
+	var query string
+	var args []interface{}
+
+	if maxDepth == 0 {
+		query = `
+		WITH RECURSIVE callers(id, kind, name, package, file, line, signature, doc, depth) AS (
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, 1
+			FROM nodes n
+			JOIN edges e ON e.from_id = n.id
+			WHERE e.to_id = ? AND e.kind = 'calls'
+			UNION
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, c.depth + 1
+			FROM nodes n
+			JOIN edges e ON e.from_id = n.id
+			JOIN callers c ON e.to_id = c.id
+			WHERE e.kind = 'calls'
+		)
+		SELECT id, kind, name, package, file, line, signature, doc, MIN(depth) as depth
+		FROM callers GROUP BY id ORDER BY depth ASC`
+		args = []interface{}{nodeID}
+	} else {
+		query = `
+		WITH RECURSIVE callers(id, kind, name, package, file, line, signature, doc, depth) AS (
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, 1
+			FROM nodes n
+			JOIN edges e ON e.from_id = n.id
+			WHERE e.to_id = ? AND e.kind = 'calls'
+			UNION
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, c.depth + 1
+			FROM nodes n
+			JOIN edges e ON e.from_id = n.id
+			JOIN callers c ON e.to_id = c.id
+			WHERE e.kind = 'calls' AND c.depth < ?
+		)
+		SELECT id, kind, name, package, file, line, signature, doc, MIN(depth) as depth
+		FROM callers GROUP BY id ORDER BY depth ASC`
+		args = []interface{}{nodeID, maxDepth}
+	}
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodesWithDepth(rows)
+}
+
+// GetDownstreamCalleesWithDepth returns all downstream callees with their depth in the call chain.
+// Uses MIN(depth) to get the shortest path depth for each callee.
+func (db *DB) GetDownstreamCalleesWithDepth(nodeID int64, maxDepth int) ([]*NodeWithDepth, error) {
+	var query string
+	var args []interface{}
+
+	if maxDepth == 0 {
+		query = `
+		WITH RECURSIVE callees(id, kind, name, package, file, line, signature, doc, depth) AS (
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, 1
+			FROM nodes n
+			JOIN edges e ON e.to_id = n.id
+			WHERE e.from_id = ? AND e.kind = 'calls'
+			UNION
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, c.depth + 1
+			FROM nodes n
+			JOIN edges e ON e.to_id = n.id
+			JOIN callees c ON e.from_id = c.id
+			WHERE e.kind = 'calls'
+		)
+		SELECT id, kind, name, package, file, line, signature, doc, MIN(depth) as depth
+		FROM callees GROUP BY id ORDER BY depth ASC`
+		args = []interface{}{nodeID}
+	} else {
+		query = `
+		WITH RECURSIVE callees(id, kind, name, package, file, line, signature, doc, depth) AS (
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, 1
+			FROM nodes n
+			JOIN edges e ON e.to_id = n.id
+			WHERE e.from_id = ? AND e.kind = 'calls'
+			UNION
+			SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc, c.depth + 1
+			FROM nodes n
+			JOIN edges e ON e.to_id = n.id
+			JOIN callees c ON e.from_id = c.id
+			WHERE e.kind = 'calls' AND c.depth < ?
+		)
+		SELECT id, kind, name, package, file, line, signature, doc, MIN(depth) as depth
+		FROM callees GROUP BY id ORDER BY depth ASC`
+		args = []interface{}{nodeID, maxDepth}
+	}
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodesWithDepth(rows)
+}
+
 // CallTreeNode represents a node in the call tree with its children
 type CallTreeNode struct {
 	Node     *graph.Node
@@ -543,6 +670,62 @@ func (db *DB) GetImplementedInterfaces(typeID int64) ([]*graph.Node, error) {
 func (db *DB) GetAllTypes() ([]*graph.Node, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes WHERE kind = 'struct'`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetAllVars returns all package-level variable nodes
+func (db *DB) GetAllVars() ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes WHERE kind = 'var'`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetAllConsts returns all package-level constant nodes
+func (db *DB) GetAllConsts() ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, kind, name, package, file, line, signature, doc FROM nodes WHERE kind = 'const'`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetReferencingFunctions returns all functions that reference the given var/const
+func (db *DB) GetReferencingFunctions(nodeID int64) ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc
+		 FROM nodes n
+		 JOIN edges e ON e.from_id = n.id
+		 WHERE e.to_id = ? AND e.kind = 'references'`,
+		nodeID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// GetReferencedVarConsts returns all vars/consts that the given function references
+func (db *DB) GetReferencedVarConsts(funcID int64) ([]*graph.Node, error) {
+	rows, err := db.conn.Query(
+		`SELECT n.id, n.kind, n.name, n.package, n.file, n.line, n.signature, n.doc
+		 FROM nodes n
+		 JOIN edges e ON e.to_id = n.id
+		 WHERE e.from_id = ? AND e.kind = 'references'`,
+		funcID,
 	)
 	if err != nil {
 		return nil, err

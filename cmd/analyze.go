@@ -163,6 +163,22 @@ func analyzeCmd() *cobra.Command {
 				fmt.Printf("接口分析: %d 个接口, %d 个类型, %d 个实现关系\n", ifaceCount, typeCount, implCount)
 			}
 
+			// Build var/const reference graph
+			varConstAnalyzer := analyzer.NewVarConstAnalyzer(pkgs, projectPath)
+			if incremental && len(changedPackages) > 0 {
+				varConstAnalyzer.SetTargetPackages(changedPackages)
+			}
+			varCount, constCount, refCount, err := varConstAnalyzer.BuildVarConstGraph(
+				db.InsertNode,
+				db.InsertEdge,
+				builder.GetNodeMap(),
+			)
+			if err != nil {
+				fmt.Printf("警告: 变量/常量分析失败: %v\n", err)
+			} else if varCount > 0 || constCount > 0 {
+				fmt.Printf("变量/常量分析: %d 个变量, %d 个常量, %d 个引用关系\n", varCount, constCount, refCount)
+			}
+
 			nodeCount, edgeCount, _ := db.GetStats()
 			fmt.Printf("写入数据库: %s\n", DbPath)
 			fmt.Printf("完成! 已存储 %d 个函数节点\n", builder.GetNodeCount())

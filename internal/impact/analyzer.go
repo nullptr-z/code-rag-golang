@@ -54,6 +54,16 @@ func (a *Analyzer) AnalyzeImpact(funcName string, upstreamDepth, downstreamDepth
 		Target: target,
 	}
 
+	// For var/const targets, find referencing functions instead of callers
+	if target.Kind == graph.NodeKindVar || target.Kind == graph.NodeKindConst {
+		report.DirectCallers, err = a.db.GetReferencingFunctions(target.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get referencing functions: %w", err)
+		}
+		// var/const don't call other functions
+		return report, nil
+	}
+
 	// Get direct callers
 	report.DirectCallers, err = a.db.GetDirectCallers(target.ID)
 	if err != nil {

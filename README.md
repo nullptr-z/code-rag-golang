@@ -21,7 +21,9 @@ AI: "Modify ProcessRequest"
 ## Install
 
 ```bash
-go install github.com/zheng/crag/cmd/crag@latest
+git clone https://github.com/zheng/crag.git
+cd crag
+go install ./cmd/crag
 ```
 
 ## Quick Start

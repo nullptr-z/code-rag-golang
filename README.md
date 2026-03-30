@@ -55,6 +55,10 @@ crag watch . -d .crag.db          # Auto-update on file changes
 
 That's it. Your AI editor can now query call graphs directly.
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/nullptr-z-code-rag-golang).
+
 ## What AI Can Do With crag
 
 After MCP setup, just ask naturally:

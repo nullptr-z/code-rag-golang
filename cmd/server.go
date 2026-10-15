@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,10 +18,19 @@ import (
 )
 
 func mcpCmd() *cobra.Command {
+	var debounceMs int
+	var watch bool
+
 	cmd := &cobra.Command{
-		Use:   "mcp",
+		Use:   "mcp [project-path]",
 		Short: "启动 MCP (Model Context Protocol) 服务器",
 		Long: `启动 MCP 服务器，允许 AI 助手（如 Cursor、Claude）直接查询代码调用图。
+
+只支持 Go 项目：启动时会检查当前目录是否为 Go 项目（存在 go.mod），
+不是 Go 项目则直接报错退出，不会创建任何 .crag.db 文件。
+
+索引全自动维护：索引为空时自动做一次全量分析；运行期间在后台监控文件
+变更并自动增量更新索引，不需要手动运行 crag analyze。
 
 MCP 工具包括：
   - impact: 分析函数变更的影响范围
@@ -28,19 +38,83 @@ MCP 工具包括：
   - downstream: 查询下游被调用者
   - search: 搜索函数
   - list: 列出所有函数`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			projectPath := "."
+			if len(args) > 0 {
+				projectPath = args[0]
+			}
+
+			if !analyzer.IsGoProject(projectPath) {
+				return fmt.Errorf("目录 %s 不是 Go 项目（未找到 go.mod），crag 仅支持 Go 项目", projectPath)
+			}
+
+			if err := ensureIndexed(projectPath, DbPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[crag] 首次索引构建失败: %v\n", err)
+			}
+
 			db, err := storage.Open(DbPath)
 			if err != nil {
 				return fmt.Errorf("打开数据库失败: %w", err)
 			}
 			defer db.Close()
 
+			if watch {
+				w, err := watcher.New(
+					projectPath,
+					DbPath,
+					watcher.WithDebounceDelay(time.Duration(debounceMs)*time.Millisecond),
+					watcher.WithOnAnalysisStart(func() {
+						fmt.Fprintf(os.Stderr, "[crag] 检测到代码变更，自动更新索引...\n")
+					}),
+					watcher.WithOnAnalysisDone(func(nodes, edges int64, duration time.Duration) {
+						fmt.Fprintf(os.Stderr, "[crag] 索引已更新: %d 节点, %d 边 (耗时 %v)\n", nodes, edges, duration.Round(time.Millisecond))
+					}),
+					watcher.WithOnError(func(err error) {
+						fmt.Fprintf(os.Stderr, "[crag] 自动更新索引失败: %v\n", err)
+					}),
+				)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[crag] 无法启动索引自动维护: %v\n", err)
+				} else {
+					w.Start()
+					defer w.Stop()
+				}
+			}
+
 			server := mcp.NewServer(db)
 			return server.Run()
 		},
 	}
 
+	cmd.Flags().IntVar(&debounceMs, "debounce", 800, "自动重建索引的防抖延迟（毫秒）")
+	cmd.Flags().BoolVar(&watch, "watch", true, "运行期间自动监控文件变更并增量更新索引")
+
 	return cmd
+}
+
+// ensureIndexed builds the initial index when the database is missing or
+// empty, so `crag mcp` is usable immediately without anyone having to
+// remember to run `crag analyze` by hand first.
+func ensureIndexed(projectPath, dbPath string) error {
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("打开数据库失败: %w", err)
+	}
+	nodeCount, _, statErr := db.GetStats()
+	funcCount, funcErr := db.GetFunctionCount()
+	db.Close()
+	if statErr == nil && funcErr == nil && nodeCount > 0 && funcCount > 0 {
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "[crag] 索引为空，执行首次分析...\n")
+	nodeCount, edgeCount, err := runInitialAnalysis(projectPath, dbPath)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "[crag] 首次分析完成: %d 节点, %d 边\n", nodeCount, edgeCount)
+	return nil
 }
 
 func watchCmd() *cobra.Command {
@@ -66,6 +140,10 @@ func watchCmd() *cobra.Command {
 			projectPath := "."
 			if len(args) > 0 {
 				projectPath = args[0]
+			}
+
+			if !analyzer.IsGoProject(projectPath) {
+				return fmt.Errorf("目录 %s 不是 Go 项目（未找到 go.mod），crag 仅支持 Go 项目", projectPath)
 			}
 
 			fmt.Println("执行初始分析...")
@@ -118,6 +196,10 @@ func watchCmd() *cobra.Command {
 }
 
 func runInitialAnalysis(projectPath, dbPath string) (nodeCount, edgeCount int64, err error) {
+	tempPath := filepath.Join(filepath.Dir(dbPath), ".crag-db.tmp")
+	_ = os.Remove(tempPath)
+	defer os.Remove(tempPath)
+
 	pkgs, err := analyzer.LoadPackages(projectPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("加载包失败: %w", err)
@@ -135,15 +217,11 @@ func runInitialAnalysis(projectPath, dbPath string) (nodeCount, edgeCount int64,
 		return 0, 0, fmt.Errorf("构建调用图失败: %w", err)
 	}
 
-	db, err := storage.Open(dbPath)
+	db, err := storage.Open(tempPath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("打开数据库失败: %w", err)
+		return 0, 0, fmt.Errorf("打开临时数据库失败: %w", err)
 	}
 	defer db.Close()
-
-	if err := db.Clear(); err != nil {
-		return 0, 0, fmt.Errorf("清空数据库失败: %w", err)
-	}
 
 	builder := graph.NewBuilder(
 		prog.Fset,
@@ -163,7 +241,30 @@ func runInitialAnalysis(projectPath, dbPath string) (nodeCount, edgeCount int64,
 		db.InsertEdge,
 	)
 
-	nodeCount, edgeCount, _ = db.GetStats()
+	varConstAnalyzer := analyzer.NewVarConstAnalyzer(pkgs, projectPath)
+	_, _, _, _ = varConstAnalyzer.BuildVarConstGraph(
+		db.InsertNode,
+		db.InsertEdge,
+		builder.GetNodeMap(),
+	)
+
+	nodeCount, edgeCount, err = db.GetStats()
+	if err != nil {
+		return 0, 0, err
+	}
+	funcCount, err := db.GetFunctionCount()
+	if err != nil || funcCount == 0 {
+		if err == nil {
+			err = fmt.Errorf("索引未生成函数节点")
+		}
+		return 0, 0, err
+	}
+	if err := db.Close(); err != nil {
+		return 0, 0, err
+	}
+	if err := storage.Publish(tempPath, dbPath); err != nil {
+		return 0, 0, err
+	}
 	return nodeCount, edgeCount, nil
 }
 

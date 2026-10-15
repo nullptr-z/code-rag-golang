@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"strings"
 
@@ -79,18 +80,9 @@ func (b *Builder) isProjectFunction(fn *ssa.Function) bool {
 	return b.projectPkgs[pkgPath]
 }
 
-// isTargetFunction checks if a function should be inserted into the database
-// In incremental mode, only functions in target packages are inserted
-func (b *Builder) isTargetFunction(fn *ssa.Function) bool {
-	if b.targetPkgs == nil {
-		// No filter, insert all project functions
-		return b.isProjectFunction(fn)
-	}
-	if fn.Pkg == nil {
-		return false
-	}
-	pkgPath := fn.Pkg.Pkg.Path()
-	return b.targetPkgs[pkgPath]
+// isTargetPackage checks whether a package should be inserted.
+func (b *Builder) isTargetPackage(pkgPath string) bool {
+	return b.targetPkgs == nil || b.targetPkgs[pkgPath]
 }
 
 // isClosure checks if a function is a closure (anonymous function)
@@ -120,9 +112,22 @@ func (b *Builder) resolveToParent(fnName string) string {
 	return fnName
 }
 
+func (b *Builder) functionName(fn *ssa.Function) string {
+	if obj := fn.Object(); obj != nil {
+		if typFn, ok := obj.(*types.Func); ok {
+			return typFn.FullName()
+		}
+	}
+	return fn.String()
+}
+
 // Build processes the call graph and stores nodes/edges
 // Closures are merged into their parent functions' call chains
 func (b *Builder) Build(cg *callgraph.Graph) error {
+	if cg == nil {
+		cg = &callgraph.Graph{Nodes: make(map[*ssa.Function]*callgraph.Node)}
+	}
+
 	// First pass: identify closures and map them to parent functions
 	for fn := range cg.Nodes {
 		if fn == nil {
@@ -137,37 +142,44 @@ func (b *Builder) Build(cg *callgraph.Graph) error {
 		}
 	}
 
-	// Second pass: create function nodes (skip closures)
-	for fn, node := range cg.Nodes {
-		if fn == nil || node == nil {
+	// Second pass: create function nodes from source declarations. The call
+	// graph is intentionally not used here because it may omit unreachable
+	// functions.
+	for _, pkg := range b.pkgs {
+		if !b.projectPkgs[pkg.PkgPath] || !b.isTargetPackage(pkg.PkgPath) || pkg.TypesInfo == nil {
 			continue
 		}
-
-		// Skip synthetic functions (init, etc.) unless they have position info
-		if fn.Synthetic != "" && fn.Pos() == token.NoPos {
-			continue
+		for _, astFile := range pkg.Syntax {
+			for _, decl := range astFile.Decls {
+				funcDecl, ok := decl.(*ast.FuncDecl)
+				if !ok || funcDecl.Name == nil {
+					continue
+				}
+				obj, ok := pkg.TypesInfo.Defs[funcDecl.Name].(*types.Func)
+				if !ok {
+					continue
+				}
+				name := obj.FullName()
+				pos := pkg.Fset.Position(funcDecl.Pos())
+				file := pos.Filename
+				if rel, err := filepath.Rel(b.projectRoot, file); err == nil {
+					file = rel
+				}
+				doc := ""
+				if funcDecl.Doc != nil {
+					doc = strings.TrimSpace(funcDecl.Doc.Text())
+				}
+				nodeID, err := b.insertFn(&Node{
+					Kind: NodeKindFunc, Name: name, Package: pkg.PkgPath,
+					File: file, Line: pos.Line,
+					Signature: obj.Signature().String(), Doc: doc,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create node for %s: %w", name, err)
+				}
+				b.nodeMap[name] = nodeID
+			}
 		}
-
-		// Skip functions not in the project (dependencies, stdlib)
-		if !b.isProjectFunction(fn) {
-			continue
-		}
-
-		// Skip closures - they will be merged into parent
-		if b.isClosure(fn) {
-			continue
-		}
-
-		// In incremental mode, only insert functions in target packages
-		if !b.isTargetFunction(fn) {
-			continue
-		}
-
-		nodeID, err := b.createFunctionNode(fn)
-		if err != nil {
-			return fmt.Errorf("failed to create node for %s: %w", fn.String(), err)
-		}
-		b.nodeMap[fn.String()] = nodeID
 	}
 
 	// Third pass: create call edges (merging closure edges to parents)
@@ -180,7 +192,7 @@ func (b *Builder) Build(cg *callgraph.Graph) error {
 		}
 
 		// Resolve caller to parent if it's a closure
-		callerName := b.resolveToParent(fn.String())
+		callerName := b.resolveToParent(b.functionName(fn))
 		fromID, ok := b.nodeMap[callerName]
 		if !ok {
 			continue
@@ -192,7 +204,7 @@ func (b *Builder) Build(cg *callgraph.Graph) error {
 			}
 
 			// Resolve callee to parent if it's a closure
-			calleeName := b.resolveToParent(edge.Callee.Func.String())
+			calleeName := b.resolveToParent(b.functionName(edge.Callee.Func))
 			toID, ok := b.nodeMap[calleeName]
 			if !ok {
 				continue
@@ -235,66 +247,6 @@ func (b *Builder) Build(cg *callgraph.Graph) error {
 	return nil
 }
 
-// createFunctionNode creates a node for a function
-func (b *Builder) createFunctionNode(fn *ssa.Function) (int64, error) {
-	pos := b.fset.Position(fn.Pos())
-
-	// Build signature string
-	sig := fn.Signature.String()
-
-	// Get doc comment if available
-	doc := b.getDocComment(fn)
-
-	// Determine package path
-	pkgPath := ""
-	if fn.Pkg != nil {
-		pkgPath = fn.Pkg.Pkg.Path()
-	}
-
-	// Build fully qualified name
-	name := fn.String()
-
-	// Convert file path to relative path
-	filePath := pos.Filename
-	if b.projectRoot != "" && filePath != "" {
-		if rel, err := filepath.Rel(b.projectRoot, filePath); err == nil {
-			filePath = rel
-		}
-	}
-
-	node := &Node{
-		Kind:      NodeKindFunc,
-		Name:      name,
-		Package:   pkgPath,
-		File:      filePath,
-		Line:      pos.Line,
-		Signature: sig,
-		Doc:       doc,
-	}
-
-	return b.insertFn(node)
-}
-
-// getDocComment extracts the doc comment for a function
-func (b *Builder) getDocComment(fn *ssa.Function) string {
-	if fn.Syntax() == nil {
-		return ""
-	}
-
-	// Try to get the AST node
-	switch syntax := fn.Syntax().(type) {
-	case *ast.FuncDecl:
-		if syntax.Doc != nil {
-			return strings.TrimSpace(syntax.Doc.Text())
-		}
-	case *ast.FuncLit:
-		// Function literals don't have doc comments
-		return ""
-	}
-
-	return ""
-}
-
 // BuildStats returns statistics about the built graph
 type BuildStats struct {
 	TotalNodes int
@@ -315,4 +267,3 @@ func (b *Builder) GetNodeMap() map[string]int64 {
 	}
 	return result
 }
-

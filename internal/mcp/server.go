@@ -65,6 +65,7 @@ type InitializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
 	ServerInfo      ServerInfo   `json:"serverInfo"`
 	Capabilities    Capabilities `json:"capabilities"`
+	Instructions    string       `json:"instructions,omitempty"`
 }
 
 type ServerInfo struct {
@@ -191,11 +192,24 @@ func (s *Server) handleInitialize(req *Request) {
 			Tools:     &ToolsCapability{},
 			Resources: &ResourcesCapability{},
 		},
+		Instructions: "crag 是一个 Go 语言代码调用关系分析工具（Code Relations Analysis for Go）。此工具仅适用于 Golang 项目，不支持其他编程语言。只有当用户正在操作的项目是 Go 语言项目时才应使用这些工具。",
 	}
 	s.sendResult(req.ID, result)
 }
 
 func (s *Server) handleToolsList(req *Request) {
+	// 索引维护说明，所有查询工具共享。crag mcp 默认在后台自动监控文件变更并
+	// 增量更新索引，查询工具不需要 AI 手动触发 analyze；这里只提示"刚保存的
+	// 变更可能还没被防抖窗口捕获到"这种极短暂的滞后。
+	const indexNote = `
+
+📌 索引自动维护：索引会在后台自动跟随文件变更增量更新，无需手动运行 crag analyze。如果代码刚保存、查询结果还没反映最新改动，等一两秒重试即可。`
+
+	// 多结果提示
+	const multiMatchNote = `
+
+⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`
+
 	tools := []Tool{
 		{
 			Name: "impact",
@@ -204,11 +218,7 @@ func (s *Server) handleToolsList(req *Request) {
 - 直接调用者：调用该函数的地方，修改参数/返回值时必须同步修改
 - 间接调用者：可能受影响的上游函数
 - 下游依赖：该函数调用的其他函数
-使用场景：修改函数签名、重构函数、删除函数前
-
-⚠️ 如果函数名匹配到多个结果，会返回候选列表，请根据上下文选择正确的函数，使用候选列表中的完整函数名重新调用此工具。
-
-📌 索引维护：当你完成代码修改（新增/修改/删除了代码文件）后，必须在后台运行 crag analyze -i -r 更新索引，否则后续查询结果可能不准确。如果改完代码后需要立即查询，则应前台阻塞运行确保索引就绪。`,
+使用场景：修改函数签名、重构函数、删除函数前` + multiMatchNote + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -231,9 +241,7 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - "这个函数在哪里被调用？"
 - "修改这个函数会影响哪些地方？"
-- 理解函数的使用方式和入口点
-
-⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
+- 理解函数的使用方式和入口点` + multiMatchNote + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -260,9 +268,7 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - "这个函数内部调用了什么？"
 - "这个函数的依赖是什么？"
-- 理解函数的实现细节和依赖关系
-
-⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
+- 理解函数的实现细节和依赖关系` + multiMatchNote + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -290,7 +296,7 @@ func (s *Server) handleToolsList(req *Request) {
 - 不确定函数/变量完整名称时
 - 查找包含某关键字的所有函数和变量
 - 探索项目结构
-示例：搜索 'Handler' 会找到所有包含 Handler 的函数和变量`,
+示例：搜索 'Handler' 会找到所有包含 Handler 的函数和变量` + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -313,7 +319,7 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - 初次了解项目时
 - 查看项目有哪些主要函数/变量/常量
-- 配合 offset 分页浏览`,
+- 配合 offset 分页浏览` + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -340,9 +346,7 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - 用户想要可视化理解调用关系
 - 生成文档或报告时
-- 解释复杂的调用链
-
-⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
+- 解释复杂的调用链` + multiMatchNote + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -369,7 +373,7 @@ func (s *Server) handleToolsList(req *Request) {
 - 查找谁实现了某个接口
 - 查找某个类型实现了哪些接口
 - 理解代码的多态结构
-- 修改接口时评估影响范围`,
+- 修改接口时评估影响范围` + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -396,9 +400,7 @@ func (s *Server) handleToolsList(req *Request) {
 使用场景：
 - 修改函数前评估风险
 - 了解哪些函数是"热点"代码
-- 重构时确定优先级
-
-⚠️ 如果函数名匹配到多个结果，会返回候选列表，请使用完整函数名重新调用。`,
+- 重构时确定优先级` + multiMatchNote + indexNote,
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{

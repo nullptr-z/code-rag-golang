@@ -102,10 +102,15 @@ func (w *Watcher) addDirs() error {
 			return err
 		}
 
-		// Skip hidden directories and common non-source directories
+		// Skip hidden directories and common non-source directories. The
+		// root path itself is exempt from the hidden-name check: when
+		// projectPath is "." (crag mcp's default), filepath.Walk's first
+		// callback reports info.Name() as "." too, which would otherwise
+		// match the hidden-dir prefix and skip the whole tree — leaving
+		// the watcher silently watching nothing.
 		name := info.Name()
 		if info.IsDir() {
-			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "testdata" {
+			if path != w.projectPath && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "testdata") {
 				return filepath.SkipDir
 			}
 			return w.fsWatcher.Add(path)
@@ -225,6 +230,10 @@ func (w *Watcher) triggerAnalysis() {
 
 // runAnalysis performs the actual code analysis
 func (w *Watcher) runAnalysis() (nodeCount, edgeCount int64, err error) {
+	tempPath := filepath.Join(filepath.Dir(w.dbPath), ".crag-db.tmp")
+	_ = os.Remove(tempPath)
+	defer os.Remove(tempPath)
+
 	// Load packages
 	pkgs, err := analyzer.LoadPackages(w.projectPath)
 	if err != nil {
@@ -247,16 +256,11 @@ func (w *Watcher) runAnalysis() (nodeCount, edgeCount int64, err error) {
 	}
 
 	// Open database
-	db, err := storage.Open(w.dbPath)
+	db, err := storage.Open(tempPath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to open database: %w", err)
+		return 0, 0, fmt.Errorf("failed to open temporary database: %w", err)
 	}
 	defer db.Close()
-
-	// Clear existing data
-	if err := db.Clear(); err != nil {
-		return 0, 0, fmt.Errorf("failed to clear database: %w", err)
-	}
 
 	// Build and store graph
 	builder := graph.NewBuilder(
@@ -279,6 +283,22 @@ func (w *Watcher) runAnalysis() (nodeCount, edgeCount int64, err error) {
 	varConstAnalyzer := analyzer.NewVarConstAnalyzer(pkgs, w.projectPath)
 	varConstAnalyzer.BuildVarConstGraph(db.InsertNode, db.InsertEdge, builder.GetNodeMap())
 
-	nodeCount, edgeCount, _ = db.GetStats()
+	nodeCount, edgeCount, err = db.GetStats()
+	if err != nil {
+		return 0, 0, err
+	}
+	funcCount, err := db.GetFunctionCount()
+	if err != nil || funcCount == 0 {
+		if err == nil {
+			err = fmt.Errorf("index contains no function nodes")
+		}
+		return 0, 0, err
+	}
+	if err := db.Close(); err != nil {
+		return 0, 0, err
+	}
+	if err := storage.Publish(tempPath, w.dbPath); err != nil {
+		return 0, 0, err
+	}
 	return nodeCount, edgeCount, nil
 }

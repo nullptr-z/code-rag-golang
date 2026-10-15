@@ -2,9 +2,40 @@ package analyzer
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"golang.org/x/tools/go/packages"
 )
+
+// IsGoProject reports whether projectPath looks like a Go project, i.e. it
+// (or one of its immediate subdirectories) contains a go.mod file. crag only
+// understands Go, so callers must check this before opening/creating a
+// .crag.db — otherwise every non-Go project ends up with a useless empty
+// database file just from being pointed at by `crag mcp`.
+func IsGoProject(projectPath string) bool {
+	if _, err := os.Stat(filepath.Join(projectPath, "go.mod")); err == nil {
+		return true
+	}
+
+	entries, err := os.ReadDir(projectPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == "vendor" || name == "node_modules" || name[0] == '.' {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(projectPath, name, "go.mod")); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // LoadPackages loads all Go packages from the given project path
 func LoadPackages(projectPath string) ([]*packages.Package, error) {

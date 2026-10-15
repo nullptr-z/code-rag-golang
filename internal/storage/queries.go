@@ -302,7 +302,6 @@ func (db *DB) GetAllFunctions() ([]*graph.Node, error) {
 	return scanNodes(rows)
 }
 
-
 // GetAllEdges returns all edges in the database
 func (db *DB) GetAllEdges() ([]*graph.Edge, error) {
 	rows, err := db.conn.Query(
@@ -409,6 +408,13 @@ func (db *DB) GetStats() (nodeCount, edgeCount int64, err error) {
 	}
 	err = db.conn.QueryRow(`SELECT COUNT(*) FROM edges`).Scan(&edgeCount)
 	return
+}
+
+// GetFunctionCount returns the number of indexed source function nodes.
+func (db *DB) GetFunctionCount() (int64, error) {
+	var count int64
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM nodes WHERE kind = 'func'`).Scan(&count)
+	return count, err
 }
 
 func joinStrings(strs []string, sep string) string {

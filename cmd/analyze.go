@@ -26,6 +26,10 @@ func analyzeCmd() *cobra.Command {
 				projectPath = args[0]
 			}
 
+			if !analyzer.IsGoProject(projectPath) {
+				return fmt.Errorf("目录 %s 不是 Go 项目（未找到 go.mod），crag 仅支持 Go 项目", projectPath)
+			}
+
 			if outputPath != "" {
 				DbPath = outputPath
 			}
